@@ -41,7 +41,7 @@ async function searchPRsForReviewer(limit = 100) {
   return res.data.items || [];
 }
 
-const STATE_FILE = path.join(__dirname, '../state/reviewed-prs.json');
+const STATE_FILE = path.join(__dirname, '../../state/reviewed-prs.json');
 
 /**
  * Load reviewed PRs from state file.
