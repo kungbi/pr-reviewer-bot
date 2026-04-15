@@ -4,6 +4,7 @@
 
 const { execSync } = require('child_process');
 const { sendDiscordNotification } = require('../notification/discord-notifier');
+const { buildCommentReplyPrompt } = require('../prompts/comment-prompt');
 const path = require('path');
 const ReviewedPRsState = require('../utils/state-manager');
 
@@ -77,24 +78,7 @@ async function generateAndPostReply(comment, context) {
   }
 
   // Build context for AI generation
-  const contextPrompt = `
-You are ${botName}, a helpful PR reviewer bot for the ${owner}/${repo} repository.
-Generate a friendly, helpful reply to the following comment:
-
-Original Comment by ${comment.author?.login || 'unknown'}:
-${comment.body}
-
-PR: #${prNumber}
-Repository: ${owner}/${repo}
-
-Generate a concise, helpful reply that:
-1. Addresses the question or feedback
-2. Is friendly and professional
-3. Does not exceed 500 characters
-4. Is in Korean if the comment is in Korean, otherwise in English
-
-Only output the reply body, nothing else.
-`.trim();
+  const contextPrompt = buildCommentReplyPrompt({ botName, owner, repo, prNumber, comment });
 
   try {
     // Spawn a subagent to generate the reply using sessions_spawn
