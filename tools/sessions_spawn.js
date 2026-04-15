@@ -1,68 +1,58 @@
+'use strict';
+
 /**
- * sessions_spawn — Spawn an openclaw agent session to perform a task.
+ * sessions_spawn — Claude CLI로 AI 분석 실행
  *
- * Supports two calling conventions:
- *   1. sessions_spawn(promptString)
- *      → calls openclaw agent, returns the output TEXT directly
- *      → used by review-executor.js (the main AI review path)
+ * claude -p (non-interactive print mode)로 프롬프트를 stdin으로 넘기고
+ * 결과 텍스트를 반환한다.
  *
- *   2. sessions_spawn({ task, description, instructions })
- *      → calls openclaw agent, returns { success, output }
- *      → used by webhook-handler.js
- *
- * @param {string|object} arg
- * @returns {Promise<{success: boolean, output: string}|string>}
+ * @param {string} prompt
+ * @returns {Promise<string>} AI 출력 텍스트
  */
-async function sessions_spawn(arg) {
-  // Determine calling convention
-  const isObjectCall = arg !== null && typeof arg === 'object' && !Array.isArray(arg);
+async function sessions_spawn(prompt) {
+  const { spawn } = require('child_process');
 
-  let task, message;
+  console.log('[sessions_spawn] Spawning claude -p for analysis...');
 
-  if (isObjectCall) {
-    // Convention 2: object — used by webhook-handler.js
-    const { task: t, description = '', instructions = '', context } = arg;
-    task = t || 'pr-review';
-    message = [description, '', instructions].join('\n');
-    console.log(`[sessions_spawn] Spawning agent for task: ${task}`);
-    if (context) console.log(`[sessions_spawn] Context: ${JSON.stringify(context)}`);
-  } else {
-    // Convention 1: plain string — used by review-executor.js
-    task = 'pr-analysis';
-    message = String(arg);
-    console.log(`[sessions_spawn] Spawning agent for pr-analysis`);
-  }
-
-  const sessionKey = `pr-review-${task}`;
-
-  // Escape for shell safety
-  const escaped = message.replace(/'/g, "'\\''");
-
-  // Use --message on CLI (not stdin) to avoid TTY detection issues
-  const cmd = `openclaw agent --agent main --session-id '${sessionKey}' --message '${escaped}'`;
-
-  let output;
-  try {
-    const { execSync } = require('child_process');
-    output = execSync(cmd, {
-      encoding: 'utf8',
-      maxBuffer: 50 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 120 * 1000,
+  return new Promise((resolve, reject) => {
+    const proc = spawn('claude', [
+      '-p',
+      '--dangerously-skip-permissions',
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5 * 60 * 1000, // 5분
     });
-    console.log(`[sessions_spawn] Agent completed for task: ${task}`);
-  } catch (err) {
-    console.error(`[sessions_spawn] Agent failed (task=${task}):`, err.message);
-    throw err;
-  }
 
-  const trimmed = output.trim();
+    let output = '';
+    let errorOutput = '';
 
-  // Convention 1: return TEXT directly (review-executor.js expects this)
-  if (!isObjectCall) return trimmed;
+    proc.stdout.on('data', (data) => {
+      output += data.toString();
+    });
 
-  // Convention 2: return structured result (webhook-handler.js expects this)
-  return { success: true, output: trimmed };
+    proc.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        const trimmed = output.trim();
+        console.log(`[sessions_spawn] Completed (${trimmed.length} chars)`);
+        resolve(trimmed);
+      } else {
+        console.error(`[sessions_spawn] Exited with code ${code}:`, errorOutput.slice(0, 500));
+        reject(new Error(`claude exited with code ${code}: ${errorOutput.slice(0, 200)}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      reject(new Error(`Failed to spawn claude: ${err.message}`));
+    });
+
+    // 프롬프트를 stdin으로 전달
+    proc.stdin.write(prompt);
+    proc.stdin.end();
+  });
 }
 
 module.exports = { sessions_spawn };
