@@ -1,3 +1,3 @@
-const github = require('./github');
+const github = require('./github/github');
 
 module.exports = github;

@@ -9,13 +9,13 @@
 'use strict';
 
 const path = require('path');
-const { getPRDiff, getPRDetails, getPRHeadSha, postComment, postInlineReview } = require('./github');
+const { getPRDiff, getPRDetails, getPRHeadSha, postComment, postInlineReview } = require('../github/github');
 const { buildDiffLineSet, isLineInDiff, parseFileLineRefs } = require('./diff-parser');
-const { sessions_spawn } = require('../tools/sessions_spawn');
-const ReviewedPRsState = require('./state-manager');
-const logger = require('./logger');
+const { sessions_spawn } = require('../../tools/sessions_spawn');
+const ReviewedPRsState = require('../utils/state-manager');
+const logger = require('../utils/logger');
 // Shared state instance (singleton-ish – callers may also pass their own)
-const DEFAULT_STATE_PATH = path.join(__dirname, '..', 'reviewed-prs.json');
+const DEFAULT_STATE_PATH = path.join(__dirname, '../..', 'reviewed-prs.json');
 const sharedState = new ReviewedPRsState(DEFAULT_STATE_PATH);
 sharedState.load();
 
@@ -161,7 +161,7 @@ async function executeReview(owner, repo, prNumber, stateOverride) {
 
   // ── 3. Notify Discord that review has started ────────────────────────────
   try {
-    const { sendReviewStartedNotification } = require('./discord-notifier');
+    const { sendReviewStartedNotification } = require('../notification/discord-notifier');
     await sendReviewStartedNotification({
       owner, repo, prNumber,
       prTitle, prUrl, prAuthor, prHeadBranch, prBaseBranch,
@@ -276,7 +276,7 @@ async function executeReview(owner, repo, prNumber, stateOverride) {
   if (minor     > 0) issueList.push(`🟢 ${minor} minor issue(s)`);
 
   try {
-    const { sendReviewCompletedNotification } = require('./discord-notifier');
+    const { sendReviewCompletedNotification } = require('../notification/discord-notifier');
     await sendReviewCompletedNotification({
       owner, repo, prNumber, prTitle, prAuthor, prHeadBranch, prBaseBranch,
       issuesFound: issueList,

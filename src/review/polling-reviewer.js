@@ -9,8 +9,8 @@
  */
 
 const path = require('path');
-const ReviewedPRsState = require('./state-manager');
-const logger = require('./logger');
+const ReviewedPRsState = require('../utils/state-manager');
+const logger = require('../utils/logger');
 
 const MAX_RETRIES = ReviewedPRsState.MAX_RETRIES; // 3
 

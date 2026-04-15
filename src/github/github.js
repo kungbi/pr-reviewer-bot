@@ -4,8 +4,8 @@
  */
 
 const axios = require('axios');
-const logger = require('./logger');
-const { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } = require('./errors');
+const logger = require('../utils/logger');
+const { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } = require('../utils/errors');
 
 const GH_API = 'https://api.github.com';
 

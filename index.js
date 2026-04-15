@@ -7,8 +7,8 @@
  * State is tracked in state/reviewed-prs.json via ReviewedPRsState.
  */
 
-const logger = require('./src/logger');
-const { startPolling, loadEnv } = require('./src/poller');
+const logger = require('./src/utils/logger');
+const { startPolling, loadEnv } = require('./src/polling/poller');
 
 // Load .env into process.env before anything else
 loadEnv();

@@ -3,11 +3,11 @@
  */
 
 const { execSync } = require('child_process');
-const { sendDiscordNotification } = require('./discord-notifier');
+const { sendDiscordNotification } = require('../notification/discord-notifier');
 const path = require('path');
-const ReviewedPRsState = require('./state-manager');
+const ReviewedPRsState = require('../utils/state-manager');
 
-const STATE_FILE = path.join(__dirname, '../state/reviewed-prs.json');
+const STATE_FILE = path.join(__dirname, '../../state/reviewed-prs.json');
 
 /**
  * Get recent comments for a PR using gh pr view --comments
@@ -98,7 +98,7 @@ Only output the reply body, nothing else.
 
   try {
     // Spawn a subagent to generate the reply using sessions_spawn
-    const { sessions_spawn } = require('./sessions-wrapper');
+    const { sessions_spawn } = require('../utils/sessions-wrapper');
     const reply = await sessions_spawn(contextPrompt);
 
     if (!reply || reply.trim().length === 0) {

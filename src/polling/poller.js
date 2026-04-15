@@ -2,8 +2,8 @@ const cron = require('node-cron');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
-const { executeReviewWithRetry } = require('./polling-reviewer');
-const { executeReview } = require('./review-executor');
+const { executeReviewWithRetry } = require('../review/polling-reviewer');
+const { executeReview } = require('../review/review-executor');
 
 // Load .env file into process.env so all modules can read it
 const ENV_FILE = '/home/node/.openclaw/workspace/kungbi-pr-reviewer-bot/.env';

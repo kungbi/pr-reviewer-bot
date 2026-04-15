@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parseLearnings, getQualityMetrics } = require('./learnings');
+const { parseLearnings, getQualityMetrics } = require('../utils/learnings');
 
 // ─── Discord Webhook Helper (duplicated from discord-notifier) ───────────────
 
