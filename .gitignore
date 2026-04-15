@@ -1,0 +1,7 @@
+node_modules/
+.env
+reviewed-prs.json
+state/
+*.log
+.clawhub/
+data/

@@ -1,0 +1,84 @@
+/**
+ * src/config.js
+ * Loads and validates environment variables.
+ * Throws on startup if required values are missing.
+ */
+
+'use strict';
+
+// Note: .env is loaded by START.sh via shell export.
+// For programmatic usage, call `loadEnvFile()` below if needed.
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function required(name) {
+  const value = process.env[name];
+  if (!value || value.trim() === '') {
+    throw new Error(`[config] Missing required environment variable: ${name}`);
+  }
+  return value.trim();
+}
+
+function optional(name, defaultValue) {
+  const value = process.env[name];
+  return (value && value.trim() !== '') ? value.trim() : defaultValue;
+}
+
+function optionalInt(name, defaultValue) {
+  const raw = optional(name, String(defaultValue));
+  const parsed = parseInt(raw, 10);
+  if (isNaN(parsed)) {
+    throw new Error(`[config] ${name} must be an integer, got: "${raw}"`);
+  }
+  return parsed;
+}
+
+// ── Config Object ─────────────────────────────────────────────────────────────
+
+const VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+
+const config = {
+  // GitHub — token is optional when `gh auth login` is already done
+  ghToken: optional('GH_TOKEN', null),
+
+  // Webhook HMAC secret (required for security)
+  webhookSecret: required('WEBHOOK_SECRET'),
+
+  // Discord incoming webhook URL (required for notifications)
+  discordWebhookUrl: required('DISCORD_WEBHOOK_URL'),
+
+  // Bot display name
+  botName: optional('BOT_NAME', 'kungbi-spider'),
+
+  // HTTP server port
+  port: optionalInt('PORT', 3000),
+
+  // Log level
+  logLevel: (() => {
+    const level = optional('LOG_LEVEL', 'INFO').toUpperCase();
+    if (!VALID_LOG_LEVELS.includes(level)) {
+      throw new Error(
+        `[config] LOG_LEVEL must be one of ${VALID_LOG_LEVELS.join('|')}, got: "${level}"`
+      );
+    }
+    return level;
+  })(),
+
+  // Polling interval in seconds
+  pollInterval: optionalInt('POLL_INTERVAL', 5),
+};
+
+// ── Startup Summary ──────────────────────────────────────────────────────────
+
+if (process.env.NODE_ENV !== 'test') {
+  console.log('[config] Loaded configuration:');
+  console.log(`  BOT_NAME       : ${config.botName}`);
+  console.log(`  PORT           : ${config.port}`);
+  console.log(`  LOG_LEVEL      : ${config.logLevel}`);
+  console.log(`  POLL_INTERVAL  : ${config.pollInterval}s`);
+  console.log(`  GH_TOKEN       : ${config.ghToken ? '***set***' : '(using gh auth)'}`);
+  console.log(`  WEBHOOK_SECRET : ***set***`);
+  console.log(`  DISCORD_WEBHOOK: ***set***`);
+}
+
+module.exports = config;

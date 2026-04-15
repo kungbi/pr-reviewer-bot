@@ -1,0 +1,292 @@
+{
+  "startTime": "2026-04-14T14:42:42.052Z",
+  "endTime": "2026-04-14T14:42:45.645Z",
+  "totalCycles": 10,
+  "reviews": [
+    {
+      "cycle": 1,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#101",
+      "status": "success",
+      "quality": 62,
+      "timestamp": "2026-04-14T14:42:42.052Z"
+    },
+    {
+      "cycle": 1,
+      "pr": "kungbi-spiders/backend-api#102",
+      "status": "success",
+      "quality": 86,
+      "timestamp": "2026-04-14T14:42:42.052Z"
+    },
+    {
+      "cycle": 1,
+      "pr": "kungbi-spiders/frontend#103",
+      "status": "success",
+      "quality": 77,
+      "timestamp": "2026-04-14T14:42:42.052Z"
+    },
+    {
+      "cycle": 2,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#201",
+      "status": "success",
+      "quality": 80,
+      "timestamp": "2026-04-14T14:42:42.432Z"
+    },
+    {
+      "cycle": 2,
+      "pr": "kungbi-spiders/backend-api#202",
+      "status": "success",
+      "quality": 68,
+      "timestamp": "2026-04-14T14:42:42.432Z"
+    },
+    {
+      "cycle": 2,
+      "pr": "kungbi-spiders/frontend#203",
+      "status": "success",
+      "quality": 63,
+      "timestamp": "2026-04-14T14:42:42.432Z"
+    },
+    {
+      "cycle": 3,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#301",
+      "status": "success",
+      "quality": 91,
+      "timestamp": "2026-04-14T14:42:42.825Z"
+    },
+    {
+      "cycle": 3,
+      "pr": "kungbi-spiders/backend-api#302",
+      "status": "success",
+      "quality": 77,
+      "timestamp": "2026-04-14T14:42:42.825Z"
+    },
+    {
+      "cycle": 3,
+      "pr": "kungbi-spiders/frontend#303",
+      "status": "success",
+      "quality": 88,
+      "timestamp": "2026-04-14T14:42:42.825Z"
+    },
+    {
+      "cycle": 4,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#401",
+      "status": "success",
+      "quality": 63,
+      "timestamp": "2026-04-14T14:42:43.205Z"
+    },
+    {
+      "cycle": 4,
+      "pr": "kungbi-spiders/backend-api#402",
+      "status": "retry",
+      "retryCount": 1,
+      "error": "Simulated random review error",
+      "timestamp": "2026-04-14T14:42:43.205Z"
+    },
+    {
+      "cycle": 4,
+      "pr": "kungbi-spiders/frontend#403",
+      "status": "success",
+      "quality": 85,
+      "timestamp": "2026-04-14T14:42:43.205Z"
+    },
+    {
+      "cycle": 5,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#501",
+      "status": "success",
+      "quality": 71,
+      "timestamp": "2026-04-14T14:42:43.576Z"
+    },
+    {
+      "cycle": 5,
+      "pr": "kungbi-spiders/backend-api#502",
+      "status": "success",
+      "quality": 88,
+      "timestamp": "2026-04-14T14:42:43.576Z"
+    },
+    {
+      "cycle": 5,
+      "pr": "kungbi-spiders/frontend#503",
+      "status": "success",
+      "quality": 60,
+      "timestamp": "2026-04-14T14:42:43.576Z"
+    },
+    {
+      "cycle": 6,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#601",
+      "status": "success",
+      "quality": 74,
+      "timestamp": "2026-04-14T14:42:43.951Z"
+    },
+    {
+      "cycle": 6,
+      "pr": "kungbi-spiders/backend-api#602",
+      "status": "retry",
+      "retryCount": 1,
+      "error": "Simulated random review error",
+      "timestamp": "2026-04-14T14:42:43.951Z"
+    },
+    {
+      "cycle": 6,
+      "pr": "kungbi-spiders/frontend#603",
+      "status": "success",
+      "quality": 62,
+      "timestamp": "2026-04-14T14:42:43.951Z"
+    },
+    {
+      "cycle": 7,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#701",
+      "status": "success",
+      "quality": 68,
+      "timestamp": "2026-04-14T14:42:44.327Z"
+    },
+    {
+      "cycle": 7,
+      "pr": "kungbi-spiders/backend-api#702",
+      "status": "success",
+      "quality": 81,
+      "timestamp": "2026-04-14T14:42:44.327Z"
+    },
+    {
+      "cycle": 7,
+      "pr": "kungbi-spiders/frontend#703",
+      "status": "success",
+      "quality": 71,
+      "timestamp": "2026-04-14T14:42:44.327Z"
+    },
+    {
+      "cycle": 8,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#801",
+      "status": "success",
+      "quality": 91,
+      "timestamp": "2026-04-14T14:42:44.708Z"
+    },
+    {
+      "cycle": 8,
+      "pr": "kungbi-spiders/backend-api#802",
+      "status": "success",
+      "quality": 68,
+      "timestamp": "2026-04-14T14:42:44.708Z"
+    },
+    {
+      "cycle": 8,
+      "pr": "kungbi-spiders/frontend#803",
+      "status": "success",
+      "quality": 64,
+      "timestamp": "2026-04-14T14:42:44.708Z"
+    },
+    {
+      "cycle": 9,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#901",
+      "status": "success",
+      "quality": 63,
+      "timestamp": "2026-04-14T14:42:45.089Z"
+    },
+    {
+      "cycle": 9,
+      "pr": "kungbi-spiders/backend-api#902",
+      "status": "success",
+      "quality": 83,
+      "timestamp": "2026-04-14T14:42:45.089Z"
+    },
+    {
+      "cycle": 9,
+      "pr": "kungbi-spiders/frontend#903",
+      "status": "success",
+      "quality": 68,
+      "timestamp": "2026-04-14T14:42:45.089Z"
+    },
+    {
+      "cycle": 10,
+      "pr": "kungbi-spiders/kungbi-pr-reviewer#1001",
+      "status": "success",
+      "quality": 70,
+      "timestamp": "2026-04-14T14:42:45.470Z"
+    },
+    {
+      "cycle": 10,
+      "pr": "kungbi-spiders/backend-api#1002",
+      "status": "success",
+      "quality": 84,
+      "timestamp": "2026-04-14T14:42:45.470Z"
+    },
+    {
+      "cycle": 10,
+      "pr": "kungbi-spiders/frontend#1003",
+      "status": "success",
+      "quality": 94,
+      "timestamp": "2026-04-14T14:42:45.470Z"
+    }
+  ],
+  "cycles": [
+    {
+      "cycle": 1,
+      "timestamp": "2026-04-14T14:42:42.230Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 2,
+      "timestamp": "2026-04-14T14:42:42.624Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 3,
+      "timestamp": "2026-04-14T14:42:43.004Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 4,
+      "timestamp": "2026-04-14T14:42:43.375Z",
+      "cycleSuccess": 2,
+      "cycleSkipped": 0,
+      "cycleFailed": 1
+    },
+    {
+      "cycle": 5,
+      "timestamp": "2026-04-14T14:42:43.750Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 6,
+      "timestamp": "2026-04-14T14:42:44.126Z",
+      "cycleSuccess": 2,
+      "cycleSkipped": 0,
+      "cycleFailed": 1
+    },
+    {
+      "cycle": 7,
+      "timestamp": "2026-04-14T14:42:44.507Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 8,
+      "timestamp": "2026-04-14T14:42:44.888Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 9,
+      "timestamp": "2026-04-14T14:42:45.269Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    },
+    {
+      "cycle": 10,
+      "timestamp": "2026-04-14T14:42:45.645Z",
+      "cycleSuccess": 3,
+      "cycleSkipped": 0,
+      "cycleFailed": 0
+    }
+  ],
+  "learnings": []
+}

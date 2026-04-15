@@ -1,0 +1,229 @@
+{
+  "reviewedPRs": {
+    "kungbi-spiders/kungbi-pr-reviewer#101": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 101,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.109Z"
+    },
+    "kungbi-spiders/backend-api#102": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 102,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.167Z"
+    },
+    "kungbi-spiders/frontend#103": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 103,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.226Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#201": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 201,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.489Z"
+    },
+    "kungbi-spiders/backend-api#202": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 202,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.549Z"
+    },
+    "kungbi-spiders/frontend#203": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 203,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.621Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#301": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 301,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.880Z"
+    },
+    "kungbi-spiders/backend-api#302": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 302,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:42.940Z"
+    },
+    "kungbi-spiders/frontend#303": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 303,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:43.000Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#401": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 401,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:43.260Z"
+    },
+    "kungbi-spiders/backend-api#402": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 402,
+      "status": "pending_retry",
+      "retryCount": 1,
+      "failures": [
+        {
+          "timestamp": "2026-04-14T14:42:43.314Z",
+          "error": "Simulated random review error"
+        }
+      ],
+      "lastFailedAt": "2026-04-14T14:42:43.314Z"
+    },
+    "kungbi-spiders/frontend#403": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 403,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:43.371Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#501": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 501,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:43.632Z"
+    },
+    "kungbi-spiders/backend-api#502": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 502,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:43.691Z"
+    },
+    "kungbi-spiders/frontend#503": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 503,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:43.748Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#601": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 601,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.008Z"
+    },
+    "kungbi-spiders/backend-api#602": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 602,
+      "status": "pending_retry",
+      "retryCount": 1,
+      "failures": [
+        {
+          "timestamp": "2026-04-14T14:42:44.063Z",
+          "error": "Simulated random review error"
+        }
+      ],
+      "lastFailedAt": "2026-04-14T14:42:44.063Z"
+    },
+    "kungbi-spiders/frontend#603": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 603,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.122Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#701": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 701,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.384Z"
+    },
+    "kungbi-spiders/backend-api#702": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 702,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.442Z"
+    },
+    "kungbi-spiders/frontend#703": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 703,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.503Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#801": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 801,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.765Z"
+    },
+    "kungbi-spiders/backend-api#802": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 802,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.824Z"
+    },
+    "kungbi-spiders/frontend#803": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 803,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:44.885Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#901": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 901,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:45.145Z"
+    },
+    "kungbi-spiders/backend-api#902": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 902,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:45.206Z"
+    },
+    "kungbi-spiders/frontend#903": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 903,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:45.264Z"
+    },
+    "kungbi-spiders/kungbi-pr-reviewer#1001": {
+      "owner": "kungbi-spiders",
+      "repo": "kungbi-pr-reviewer",
+      "prNumber": 1001,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:45.524Z"
+    },
+    "kungbi-spiders/backend-api#1002": {
+      "owner": "kungbi-spiders",
+      "repo": "backend-api",
+      "prNumber": 1002,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:45.581Z"
+    },
+    "kungbi-spiders/frontend#1003": {
+      "owner": "kungbi-spiders",
+      "repo": "frontend",
+      "prNumber": 1003,
+      "status": "reviewed",
+      "reviewedAt": "2026-04-14T14:42:45.640Z"
+    }
+  },
+  "repliedComments": {}
+}
