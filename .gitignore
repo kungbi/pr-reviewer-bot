@@ -6,3 +6,5 @@ state/
 .clawhub/
 data/
 dist/
+.omc/
+.bot.pid
