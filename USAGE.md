@@ -54,52 +54,42 @@ Restart after editing:
 
 ## How to Trigger Reviews
 
-### Option 1 — Webhook (Recommended for Production)
+이 봇은 **폴링 전용**입니다. 웹훅 서버가 없습니다.
 
-GitHub sends events automatically when:
-- A PR is opened
-- A PR reviewer is requested
-- A PR is assigned
+### Option 1 — Polling (자동, 항상 켜짐)
 
-Set up in GitHub: **Repository → Settings → Webhooks → Add webhook**
+봇이 실행 중이면 `POLL_INTERVAL_MINUTES`마다 자동으로 GitHub를 폴링합니다.
 
-- Payload URL: `https://your-domain.com/webhook`
-- Content type: `application/json`
-- Secret: must match `WEBHOOK_SECRET` in `.env`
-- Events: select **Pull requests**
+`src/polling/poller.js` → `src/review/polling-reviewer.js` 순서로:
+1. `gh pr list --assignee @me` 로 오픈 PR 조회
+2. `state/reviewed-prs.json` 으로 중복 방지 (SHA 기반)
+3. 새 PR 감지 시 sessions_spawn → AI 리뷰 실행
+4. Discord 알림 전송
 
-### Option 2 — Polling (Always On)
+### Option 2 — Manual Review Trigger
 
-The bot polls every `POLL_INTERVAL` seconds regardless of webhooks.
-
-Uses `src/poller.js` + `src/polling-reviewer.js` to:
-1. Fetch open PRs from configured GitHub repos
-2. Check if already reviewed (via `state/reviewed-prs.json`)
-3. Spawn an OpenClaw subagent for each new PR
-4. Post results to Discord
-
-### Option 3 — Manual Review Trigger
-
-Send a test event directly:
+특정 PR을 즉시 수동으로 리뷰하려면:
 
 ```bash
-curl -X POST http://localhost:3000/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-GitHub-Event: pull_request" \
-  -H "X-Hub-Signature-256: sha256=<your-hmac>" \
-  -d '{
-    "action": "review_requested",
-    "pull_request": {
-      "number": 42,
-      "title": "feat: new feature",
-      "html_url": "https://github.com/kungbi-spiders/repo/pull/42",
-      "user": {"login": "developer"}
-    },
-    "requested_reviewer": {"login": "kungbi-spider"}
-  }'
+cd ~/pr-reviewer-bot
+node -e "
+const { executeReview } = require('./src/review/review-executor');
+executeReview('org이름', 'repo이름', PR번호)
+  .then(r => console.log(r))
+  .catch(e => console.error(e));
+"
 ```
 
-For local testing without HMAC validation, use the test script instead.
+예시:
+```bash
+node -e "
+const { executeReview } = require('./src/review/review-executor');
+executeReview('kungbi-spiders', 'my-repo', 42)
+  .then(r => console.log(r));
+"
+```
+
+봇이 실행 중이 아니어도 동작합니다.
 
 ---
 

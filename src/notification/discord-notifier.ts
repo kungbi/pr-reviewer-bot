@@ -2,6 +2,8 @@
  * Discord Notifier - Sends notifications to Discord via webhook
  */
 
+import { DiscordEmbed, DiscordField, NotificationData } from '../types';
+
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -9,22 +11,20 @@ const RETRY_DELAY_MS = 1000;
 /**
  * Sleep utility for retry delays
  */
-function sleep(ms) {
+function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
  * Send a POST request to Discord webhook
- * @param {object} payload - Discord webhook payload
- * @returns {Promise<boolean>} Success status
  */
-async function sendWebhook(payload) {
+async function sendWebhook(payload: unknown): Promise<boolean> {
   if (!DISCORD_WEBHOOK_URL) {
     console.warn('[DISCORD] DISCORD_WEBHOOK_URL not set, skipping notification');
     return false;
   }
 
-  let lastError;
+  let lastError: Error = new Error('No attempts made');
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -43,8 +43,8 @@ async function sendWebhook(payload) {
       lastError = new Error(`Discord API error: ${response.status} - ${text}`);
       console.error(`[DISCORD] Attempt ${attempt} failed:`, lastError.message);
     } catch (err) {
-      lastError = err;
-      console.error(`[DISCORD] Attempt ${attempt} failed:`, err.message);
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.error(`[DISCORD] Attempt ${attempt} failed:`, lastError.message);
     }
 
     if (attempt < MAX_RETRIES) {
@@ -58,15 +58,15 @@ async function sendWebhook(payload) {
 
 /**
  * Build a Discord embed for PR events
- * @param {string} title - Embed title
- * @param {string} description - Embed description
- * @param {number} color - Embed color (decimal)
- * @param {Array} fields - Array of {name, value, inline?} field objects
- * @param {string} url - Optional URL to link the title
- * @returns {object} Discord embed object
  */
-function buildEmbed({ title, description, color, fields = [], url = '' }) {
-  const embed = {
+function buildEmbed({ title, description, color, fields = [], url = '' }: {
+  title: string;
+  description: string;
+  color: number;
+  fields?: DiscordField[];
+  url?: string;
+}): DiscordEmbed {
+  const embed: DiscordEmbed = {
     title,
     description,
     color,
@@ -86,11 +86,8 @@ function buildEmbed({ title, description, color, fields = [], url = '' }) {
 
 /**
  * Main notification dispatcher
- * @param {string} event - Event type: 'pr_assigned' | 'review_completed' | 'comment_needed'
- * @param {object} data - Event-specific data
- * @returns {Promise<boolean>} Success status
  */
-async function sendDiscordNotification(event, data) {
+async function sendDiscordNotification(event: string, data: NotificationData): Promise<boolean> {
   switch (event) {
     case 'pr_assigned':
       return sendPRAssignedNotification(data);
@@ -106,10 +103,8 @@ async function sendDiscordNotification(event, data) {
 
 /**
  * Notify when a new PR is assigned to the bot
- * @param {object} data - { repoOwner, repoName, prNumber, prTitle, prUrl, action }
- * @returns {Promise<boolean>}
  */
-async function sendPRAssignedNotification({ repoOwner, repoName, prNumber, prTitle, prUrl, action }) {
+async function sendPRAssignedNotification({ repoOwner, repoName, prNumber, prTitle, prUrl, action }: NotificationData): Promise<boolean> {
   const embed = buildEmbed({
     title: `🕷️ New PR Assigned - #${prNumber}`,
     description: `**${prTitle}**\nA new pull request has been assigned for review.`,
@@ -131,16 +126,13 @@ async function sendPRAssignedNotification({ repoOwner, repoName, prNumber, prTit
 
 /**
  * Notify when a review is completed
- * @param {object} data - { owner, repo, prNumber, prTitle, issuesFound }
- * @returns {Promise<boolean>}
  */
-async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle, prAuthor = null, prHeadBranch = null, prBaseBranch = null, issuesFound = [] }) {
-  // Determine embed color based on issues
+async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle, prAuthor = null, prHeadBranch = null, prBaseBranch = null, issuesFound = [] }: NotificationData): Promise<boolean> {
   const hasIssues = issuesFound && issuesFound.length > 0;
 
-  let color;
-  let statusEmoji;
-  let statusText;
+  let color: number;
+  let statusEmoji: string;
+  let statusText: string;
 
   if (!hasIssues) {
     color = 0x10B981; // Green
@@ -149,27 +141,25 @@ async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle,
   } else {
     color = 0xEF4444; // Red
     statusEmoji = '⚠️';
-    statusText = `${issuesFound.length} issue(s) found`;
+    statusText = `${issuesFound!.length} issue(s) found`;
   }
 
   const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
   const repoName = `${owner}/${repo}`;
 
-  // Build fields
-  const fields = [
+  const fields: DiscordField[] = [
     { name: 'Repository', value: repoName, inline: true },
     { name: 'PR Number', value: `#${prNumber}`, inline: true },
   ];
   if (prAuthor) fields.push({ name: 'Author', value: `@${prAuthor}`, inline: true });
   if (prHeadBranch && prBaseBranch) fields.push({ name: 'Branch', value: `\`${prHeadBranch}\` → \`${prBaseBranch}\``, inline: false });
 
-  // Add issues as a field if found
   if (hasIssues) {
-    const issueList = issuesFound
+    const issueList = issuesFound!
       .slice(0, 5)
       .map((issue, i) => `${i + 1}. ${issue}`)
       .join('\n');
-    const moreText = issuesFound.length > 5 ? `\n*...and ${issuesFound.length - 5} more*` : '';
+    const moreText = issuesFound!.length > 5 ? `\n*...and ${issuesFound!.length - 5} more*` : '';
     fields.push({
       name: 'Issues Found',
       value: issueList + moreText,
@@ -194,10 +184,8 @@ async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle,
 
 /**
  * Notify when a reply is needed on a comment
- * @param {object} data - { repoOwner, repoName, prNumber, prTitle, prUrl, commenter, commentId }
- * @returns {Promise<boolean>}
  */
-async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, prTitle, prUrl, commenter, commentId }) {
+async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, prTitle, prUrl, commenter, commentId }: NotificationData): Promise<boolean> {
   const embed = buildEmbed({
     title: `💬 Reply Needed - #${prNumber}`,
     description: `**@${commenter}** mentioned the bot and requires a reply on **${prTitle}**.`,
@@ -218,12 +206,10 @@ async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, pr
 }
 
 /**
- * Notify when a review has started (replaces GitHub "PR Review Started" comment)
- * @param {object} data - { owner, repo, prNumber, prTitle, prUrl }
- * @returns {Promise<boolean>}
+ * Notify when a review has started
  */
-async function sendReviewStartedNotification({ owner, repo, prNumber, prTitle, prUrl, prAuthor = null, prHeadBranch = null, prBaseBranch = null }) {
-  const fields = [
+async function sendReviewStartedNotification({ owner, repo, prNumber, prTitle, prUrl, prAuthor = null, prHeadBranch = null, prBaseBranch = null }: NotificationData): Promise<boolean> {
+  const fields: DiscordField[] = [
     { name: 'Repository', value: `${owner}/${repo}`, inline: true },
     { name: 'PR', value: `#${prNumber}`, inline: true },
   ];
@@ -245,7 +231,7 @@ async function sendReviewStartedNotification({ owner, repo, prNumber, prTitle, p
   });
 }
 
-module.exports = {
+export {
   sendDiscordNotification,
   sendPRAssignedNotification,
   sendReviewCompletedNotification,

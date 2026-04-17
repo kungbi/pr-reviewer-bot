@@ -2,16 +2,20 @@
 
 /**
  * Build the prompt for auto-replying to PR comments that mention the bot.
- *
- * @param {object} params
- * @param {string} params.botName
- * @param {string} params.owner
- * @param {string} params.repo
- * @param {number} params.prNumber
- * @param {object} params.comment - { body, author: { login } }
- * @returns {string} Prompt string
  */
-function buildCommentReplyPrompt({ botName, owner, repo, prNumber, comment }) {
+
+interface CommentReplyParams {
+  botName: string;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  comment: {
+    body: string;
+    author?: { login?: string };
+  };
+}
+
+export function buildCommentReplyPrompt({ botName, owner, repo, prNumber, comment }: CommentReplyParams): string {
   return `
 You are ${botName}, a helpful PR reviewer bot for the ${owner}/${repo} repository.
 Generate a friendly, helpful reply to the following comment:
@@ -31,5 +35,3 @@ Generate a concise, helpful reply that:
 Only output the reply body, nothing else.
 `.trim();
 }
-
-module.exports = { buildCommentReplyPrompt };

@@ -2,20 +2,18 @@
 
 /**
  * Build the analysis prompt for PR review.
- *
- * The prompt embeds the full diff text so the agent does not need
- * to fetch it again – keeping the flow synchronous from our side.
- *
- * @param {object} params
- * @param {string} params.owner
- * @param {string} params.repo
- * @param {number} params.prNumber
- * @param {string} params.prTitle
- * @param {string} params.prUrl
- * @param {string} params.diff - Raw unified diff text
- * @returns {string} Prompt string
  */
-function buildAnalysisPrompt({ owner, repo, prNumber, prTitle, prUrl, diff }) {
+
+interface ReviewPromptParams {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  prTitle: string;
+  prUrl: string;
+  diff: string;
+}
+
+export function buildAnalysisPrompt({ owner, repo, prNumber, prTitle, prUrl, diff }: ReviewPromptParams): string {
   return `You are using the kungbi-pr-review skill to review a GitHub Pull Request.
 
 ## PR Info
@@ -78,5 +76,3 @@ IMPORTANT:
 - 모든 이슈에 근거, 문제, 영향, 수정 제시안 4개 필드 빠짐없이 작성
 - 출력은 한국어로만 작성`;
 }
-
-module.exports = { buildAnalysisPrompt };

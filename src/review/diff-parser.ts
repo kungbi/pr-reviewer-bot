@@ -1,28 +1,24 @@
 'use strict';
 
 /**
- * diff-parser.js
+ * diff-parser.ts
  *
  * Parses a unified diff and builds a set of line numbers visible in the diff
  * for each file (added lines + context lines on the RIGHT/new side).
- *
- * Used to validate that AI-suggested line numbers are actually present in the
- * PR diff before posting inline comments via the GitHub line+side API.
  */
+
+import { FileLineRef, Severity } from '../types';
+
+export type DiffLineSet = Record<string, Set<number>>;
 
 /**
  * Build a map of { filePath: Set<newLineNumber> } from a unified diff.
- * Only new-file lines (context + additions) are included — deletions have no
- * new-file line number and cannot receive RIGHT-side inline comments.
- *
- * @param {string} diff - Raw unified diff text
- * @returns {Object} lineSet — { filePath: Set<number> }
  */
-function buildDiffLineSet(diff) {
-  const lineSet = {};
+export function buildDiffLineSet(diff: string): DiffLineSet {
+  const lineSet: DiffLineSet = {};
   const lines = diff.split('\n');
 
-  let currentFile = null;
+  let currentFile: string | null = null;
   let newLineNumber = 0;
   let inHunk = false;
 
@@ -66,60 +62,45 @@ function buildDiffLineSet(diff) {
 
 /**
  * Check whether a given line is present in the diff for a file.
- *
- * @param {Object} lineSet - Result of buildDiffLineSet
- * @param {string} filePath
- * @param {number} lineNumber
- * @returns {boolean}
  */
-function isLineInDiff(lineSet, filePath, lineNumber) {
+export function isLineInDiff(lineSet: DiffLineSet, filePath: string, lineNumber: number): boolean {
   return lineSet[filePath]?.has(lineNumber) ?? false;
 }
 
 /**
  * Parse file:line references from an AI review report.
- *
- * Looks for patterns like:
- *   **src/user.js:97**        — single line
- *   **src/user.js:97-104**    — line range
- *
- * Severity is determined by which section (### Blockers / ### Important / ### Minor)
- * the reference falls under — not by parsing the text after the marker.
- *
- * @param {string} reviewText
- * @returns {Array<{file: string, line: number, severity: string, context: string}>}
  */
-function parseFileLineRefs(reviewText) {
+export function parseFileLineRefs(reviewText: string): FileLineRef[] {
   // Build section map: each ref's position mapped to its severity
   const sectionPattern = /^###\s*(Blockers?|Important|Minor)/gim;
-  const sections = [];
-  let sm;
+  const sections: Array<{ index: number; name: string }> = [];
+  let sm: RegExpExecArray | null;
   while ((sm = sectionPattern.exec(reviewText)) !== null) {
     const name = sm[1].toLowerCase().replace(/s$/, ''); // 'blocker', 'important', 'minor'
     sections.push({ index: sm.index, name });
   }
 
-  function severityAt(pos) {
-    let current = null;
+  function severityAt(pos: number): Severity {
+    let current: string | null = null;
     for (const sec of sections) {
       if (sec.index <= pos) current = sec.name;
       else break;
     }
-    return current || 'minor';
+    return (current as Severity) || 'minor';
   }
 
-  const refs = [];
+  const refs: FileLineRef[] = [];
   const refPattern = /\*\*([^\*\s:]+\.[a-zA-Z0-9]+):(\d+)(?:-\d+)?\*\*/g;
-  const matches = [];
-  let m;
+  const matches: Array<{ file: string; line: number; index: number; endIndex: number }> = [];
+  let m: RegExpExecArray | null;
   while ((m = refPattern.exec(reviewText)) !== null) {
     matches.push({ file: m[1], line: parseInt(m[2], 10), index: m.index, endIndex: refPattern.lastIndex });
   }
 
   // Find all section header positions to use as hard boundaries
   const sectionHeaderPattern = /^#{1,3}\s+\S/gm;
-  const sectionBoundaries = [];
-  let sh;
+  const sectionBoundaries: number[] = [];
+  let sh: RegExpExecArray | null;
   while ((sh = sectionHeaderPattern.exec(reviewText)) !== null) {
     sectionBoundaries.push(sh.index);
   }
@@ -150,5 +131,3 @@ function parseFileLineRefs(reviewText) {
   }
   return refs;
 }
-
-module.exports = { buildDiffLineSet, isLineInDiff, parseFileLineRefs };

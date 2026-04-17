@@ -1,5 +1,5 @@
 /**
- * src/config.js
+ * src/utils/config.ts
  * Loads and validates environment variables.
  * Throws on startup if required values are missing.
  */
@@ -11,7 +11,7 @@
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function required(name) {
+function required(name: string): string {
   const value = process.env[name];
   if (!value || value.trim() === '') {
     throw new Error(`[config] Missing required environment variable: ${name}`);
@@ -19,13 +19,13 @@ function required(name) {
   return value.trim();
 }
 
-function optional(name, defaultValue) {
+function optional(name: string, defaultValue: string | null): string | null {
   const value = process.env[name];
   return (value && value.trim() !== '') ? value.trim() : defaultValue;
 }
 
-function optionalInt(name, defaultValue) {
-  const raw = optional(name, String(defaultValue));
+function optionalInt(name: string, defaultValue: number): number {
+  const raw = optional(name, String(defaultValue)) as string;
   const parsed = parseInt(raw, 10);
   if (isNaN(parsed)) {
     throw new Error(`[config] ${name} must be an integer, got: "${raw}"`);
@@ -48,14 +48,14 @@ const config = {
   discordWebhookUrl: required('DISCORD_WEBHOOK_URL'),
 
   // Bot display name
-  botName: optional('BOT_NAME', 'kungbi-spider'),
+  botName: optional('BOT_NAME', 'kungbi-spider') as string,
 
   // HTTP server port
   port: optionalInt('PORT', 3000),
 
   // Log level
   logLevel: (() => {
-    const level = optional('LOG_LEVEL', 'INFO').toUpperCase();
+    const level = (optional('LOG_LEVEL', 'INFO') as string).toUpperCase();
     if (!VALID_LOG_LEVELS.includes(level)) {
       throw new Error(
         `[config] LOG_LEVEL must be one of ${VALID_LOG_LEVELS.join('|')}, got: "${level}"`
@@ -81,4 +81,4 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  DISCORD_WEBHOOK: ***set***`);
 }
 
-module.exports = config;
+export default config;

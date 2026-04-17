@@ -1,12 +1,36 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = path.join(process.cwd(), 'data');
 const PROGRESS_FILE = path.join(DATA_DIR, 'progress.txt');
 const ITERATION_COUNTER_FILE = path.join(DATA_DIR, 'iteration_counter.json');
 
+interface LearningEntry {
+  iteration: number;
+  timestamp: string;
+  text: string;
+}
+
+interface QualityMetrics {
+  totalIterations: number;
+  averageQuality: string | null;
+  recentTrends: number[];
+  qualityScores: number[];
+}
+
+interface ReviewContext {
+  prNumber?: number;
+  repoOwner?: string;
+  repoName?: string;
+  prompt?: string;
+  _learningsApplied?: boolean;
+  _learningsCount?: number;
+  _lastIteration?: number;
+  [key: string]: unknown;
+}
+
 // Ensure data directory and files exist
-function init() {
+function init(): void {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
@@ -19,10 +43,10 @@ function init() {
 }
 
 // Get current iteration number
-function getIterationNumber() {
+function getIterationNumber(): number {
   init();
   try {
-    const data = JSON.parse(fs.readFileSync(ITERATION_COUNTER_FILE, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(ITERATION_COUNTER_FILE, 'utf8')) as { count: number };
     return data.count || 0;
   } catch {
     return 0;
@@ -30,7 +54,7 @@ function getIterationNumber() {
 }
 
 // Increment and return next iteration number
-function nextIteration() {
+function nextIteration(): number {
   init();
   const current = getIterationNumber();
   const next = current + 1;
@@ -41,10 +65,8 @@ function nextIteration() {
 /**
  * Append learnings text to progress.txt
  * Format: === Iteration N (ISO timestamp) ===\nlearnings\n\n
- * @param {string} text - Learnings to append
- * @returns {number} - Iteration number used
  */
-function appendLearnings(text) {
+function appendLearnings(text: string): number {
   init();
   const iteration = nextIteration();
   const timestamp = new Date().toISOString();
@@ -55,9 +77,8 @@ function appendLearnings(text) {
 
 /**
  * Read all learnings from progress.txt
- * @returns {string} - All learnings content
  */
-function getLearnings() {
+function getLearnings(): string {
   init();
   if (!fs.existsSync(PROGRESS_FILE)) {
     return '';
@@ -67,13 +88,12 @@ function getLearnings() {
 
 /**
  * Parse learnings into structured array
- * @returns {Array<{iteration: number, timestamp: string, text: string}>}
  */
-function parseLearnings() {
+function parseLearnings(): LearningEntry[] {
   const content = getLearnings();
   if (!content.trim()) return [];
 
-  const entries = [];
+  const entries: LearningEntry[] = [];
   const regex = /=== Iteration (\d+) \(([^)]+)\) ===\n([\s\S]*?)(?=\n\n=== Iteration|\n\n$|$)/g;
   let match;
   while ((match = regex.exec(content)) !== null) {
@@ -88,10 +108,8 @@ function parseLearnings() {
 
 /**
  * Get learnings as structured or plain text
- * @param {object} options - { structured: boolean }
- * @returns {string|Array}
  */
-function getLearningsStructured(options = { structured: false }) {
+function getLearningsStructured(options: { structured: boolean } = { structured: false }): string | LearningEntry[] {
   if (options.structured) {
     return parseLearnings();
   }
@@ -100,10 +118,8 @@ function getLearningsStructured(options = { structured: false }) {
 
 /**
  * Inject learnings into next review context
- * @param {object} reviewContext - { prNumber, repoOwner, repoName, prTitle, prUrl, prompt }
- * @returns {object} - Modified reviewContext with learnings injected
  */
-function applyLearningsToNextReview(reviewContext) {
+function applyLearningsToNextReview(reviewContext: ReviewContext): ReviewContext {
   const learnings = parseLearnings();
 
   // Build learnings summary for the prompt
@@ -135,10 +151,16 @@ function applyLearningsToNextReview(reviewContext) {
 
 /**
  * Record a review completion with quality metrics
- * @param {object} params - { prNumber, repoOwner, repoName, iteration, quality, feedback, suggestions }
- * @returns {number} - Iteration number
  */
-function recordReviewQuality({ prNumber, repoOwner, repoName, iteration, quality, feedback, suggestions }) {
+function recordReviewQuality({ prNumber, repoOwner, repoName, iteration, quality, feedback, suggestions }: {
+  prNumber: number;
+  repoOwner: string;
+  repoName: string;
+  iteration: number;
+  quality: number;
+  feedback: string;
+  suggestions: string;
+}): number {
   const text = [
     `PR: ${repoOwner}/${repoName}#${prNumber}`,
     `Quality: ${quality}/10`,
@@ -151,9 +173,8 @@ function recordReviewQuality({ prNumber, repoOwner, repoName, iteration, quality
 
 /**
  * Get quality metrics summary
- * @returns {object} - { totalIterations, averageQuality, recentTrends }
  */
-function getQualityMetrics() {
+function getQualityMetrics(): QualityMetrics {
   const learnings = parseLearnings();
   const totalIterations = learnings.length;
 
@@ -163,7 +184,7 @@ function getQualityMetrics() {
       const match = l.text.match(/Quality: (\d+)\/10/);
       return match ? parseInt(match[1], 10) : null;
     })
-    .filter(q => q !== null);
+    .filter((q): q is number => q !== null);
 
   const averageQuality = qualityScores.length > 0
     ? (qualityScores.reduce((a, b) => a + b, 0) / qualityScores.length).toFixed(2)
@@ -181,7 +202,7 @@ function getQualityMetrics() {
   };
 }
 
-module.exports = {
+export {
   appendLearnings,
   getLearnings,
   getLearningsStructured,

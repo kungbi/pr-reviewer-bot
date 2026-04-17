@@ -5,13 +5,10 @@
  *
  * claude -p (non-interactive print mode)로 프롬프트를 stdin으로 넘기고
  * 결과 텍스트를 반환한다.
- *
- * @param {string} prompt
- * @returns {Promise<string>} AI 출력 텍스트
  */
-async function sessions_spawn(prompt) {
-  const { spawn } = require('child_process');
+import { spawn } from 'child_process';
 
+export async function sessions_spawn(prompt: string): Promise<string> {
   console.log('[sessions_spawn] Spawning claude -p for analysis...');
 
   return new Promise((resolve, reject) => {
@@ -26,15 +23,15 @@ async function sessions_spawn(prompt) {
     let output = '';
     let errorOutput = '';
 
-    proc.stdout.on('data', (data) => {
+    proc.stdout.on('data', (data: Buffer) => {
       output += data.toString();
     });
 
-    proc.stderr.on('data', (data) => {
+    proc.stderr.on('data', (data: Buffer) => {
       errorOutput += data.toString();
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code: number | null) => {
       if (code === 0) {
         const trimmed = output.trim();
         console.log(`[sessions_spawn] Completed (${trimmed.length} chars)`);
@@ -45,7 +42,7 @@ async function sessions_spawn(prompt) {
       }
     });
 
-    proc.on('error', (err) => {
+    proc.on('error', (err: Error) => {
       reject(new Error(`Failed to spawn claude: ${err.message}`));
     });
 
@@ -54,5 +51,3 @@ async function sessions_spawn(prompt) {
     proc.stdin.end();
   });
 }
-
-module.exports = { sessions_spawn };
