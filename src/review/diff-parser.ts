@@ -1,4 +1,3 @@
-'use strict';
 
 /**
  * diff-parser.ts

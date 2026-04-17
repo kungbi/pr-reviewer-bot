@@ -4,7 +4,6 @@
  * Throws on startup if required values are missing.
  */
 
-'use strict';
 
 // Note: .env is loaded by START.sh via shell export.
 // For programmatic usage, call `loadEnvFile()` below if needed.

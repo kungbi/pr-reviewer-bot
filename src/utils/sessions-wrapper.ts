@@ -1,4 +1,3 @@
-'use strict';
 
 /**
  * sessions-wrapper — tools/sessions_spawn.ts의 re-export

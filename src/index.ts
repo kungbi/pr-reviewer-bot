@@ -1,4 +1,3 @@
-'use strict';
 
 import logger from './utils/logger';
 import { startPolling, loadEnv } from './polling/poller';

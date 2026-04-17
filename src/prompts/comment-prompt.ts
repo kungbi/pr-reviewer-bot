@@ -1,4 +1,3 @@
-'use strict';
 
 /**
  * Build the prompt for auto-replying to PR comments that mention the bot.

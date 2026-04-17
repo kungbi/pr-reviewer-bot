@@ -6,7 +6,6 @@
  * posts review comments, and marks PRs as reviewed in the state file.
  */
 
-'use strict';
 
 import path from 'path';
 import { getPRDiff, getPRDetails, getPRHeadSha, postComment, postInlineReview } from '../github/github';

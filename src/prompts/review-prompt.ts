@@ -1,4 +1,3 @@
-'use strict';
 
 /**
  * Build the analysis prompt for PR review.
