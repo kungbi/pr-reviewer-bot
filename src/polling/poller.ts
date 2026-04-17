@@ -4,11 +4,8 @@ import path from 'path';
 import { executeReviewWithRetry } from '../review/polling-reviewer';
 import { executeReview } from '../review/review-executor';
 import ReviewedPRsState from '../utils/state-manager';
+import config from '../utils/config';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
-
-function loadEnv(): void {
-  require('dotenv').config({ path: path.join(process.cwd(), '.env') });
-}
 
 const GH_API = 'https://api.github.com';
 const STATE_FILE = path.join(process.cwd(), 'state/reviewed-prs.json');
@@ -34,7 +31,7 @@ function getHeaders(): Record<string, string> {
  * Search ALL repos for PRs where the bot user is requested as reviewer.
  */
 async function searchPRsForReviewer(limit = 100): Promise<GitHubPRItem[]> {
-  const username = process.env.GH_USERNAME;
+  const username = config.githubReviewer;
   const url = `${GH_API}/search/issues?q=type:pr+state:open+review-requested:${username}&per_page=${limit}`;
   const res = await axios.get<{ items: GitHubPRItem[] }>(url, { headers: getHeaders() });
   return res.data.items || [];
@@ -56,7 +53,6 @@ function getRepoInfo(pr: GitHubPRItem): { owner: string; name: string } {
  * Poll for PRs assigned to the bot user
  */
 async function pollAssignedPRs(): Promise<void> {
-  loadEnv();
   console.log('[POLLER] Checking for assigned PRs...');
 
   try {
@@ -178,5 +174,4 @@ function startPolling(intervalMinutes = 5): void {
 export {
   pollAssignedPRs,
   startPolling,
-  loadEnv,
 };

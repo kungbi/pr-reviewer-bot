@@ -3,6 +3,7 @@
  */
 
 import { DiscordEmbed, DiscordField, NotificationData } from '../types';
+import config from '../utils/config';
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const MAX_RETRIES = 3;
@@ -73,7 +74,7 @@ function buildEmbed({ title, description, color, fields = [], url = '' }: {
     fields,
     timestamp: new Date().toISOString(),
     footer: {
-      text: '🕷️ Kungbi PR Reviewer Bot',
+      text: `🕷️ ${config.botName}`,
     },
   };
 
@@ -118,8 +119,8 @@ async function sendPRAssignedNotification({ repoOwner, repoName, prNumber, prTit
   });
 
   return sendWebhook({
-    username: 'Kungbi PR Reviewer',
-    avatar_url: 'https://github.com/kungbi-spider.png',
+    username: config.botName,
+    avatar_url: config.botAvatarUrl,
     embeds: [embed],
   });
 }
@@ -176,8 +177,8 @@ async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle,
   });
 
   return sendWebhook({
-    username: 'Kungbi PR Reviewer',
-    avatar_url: 'https://github.com/kungbi-spider.png',
+    username: config.botName,
+    avatar_url: config.botAvatarUrl,
     embeds: [embed],
   });
 }
@@ -199,8 +200,8 @@ async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, pr
   });
 
   return sendWebhook({
-    username: 'Kungbi PR Reviewer',
-    avatar_url: 'https://github.com/kungbi-spider.png',
+    username: config.botName,
+    avatar_url: config.botAvatarUrl,
     embeds: [embed],
   });
 }
@@ -225,8 +226,8 @@ async function sendReviewStartedNotification({ owner, repo, prNumber, prTitle, p
   });
 
   return sendWebhook({
-    username: 'Kungbi PR Reviewer',
-    avatar_url: 'https://github.com/kungbi-spider.png',
+    username: config.botName,
+    avatar_url: config.botAvatarUrl,
     embeds: [embed],
   });
 }

@@ -14,6 +14,7 @@ import { buildDiffLineSet, isLineInDiff, parseFileLineRefs } from './diff-parser
 import { sessions_spawn } from '../../tools/sessions_spawn';
 import ReviewedPRsState from '../utils/state-manager';
 import logger from '../utils/logger';
+import config from '../utils/config';
 import { ReviewResult, ReviewVerdict, InlineComment, ReviewEvent } from '../types';
 
 // Shared state instance (singleton-ish – callers may also pass their own)
@@ -136,7 +137,7 @@ async function executeReview(
           path: ref.file,
           line: ref.line,
           side: 'RIGHT',
-          body: (ref.context || `Issue at line ${ref.line}`) + '\n\n---\n*— ThomasShelby Auto-Review*',
+          body: (ref.context || `Issue at line ${ref.line}`) + '\n\n---\n*— ${config.botName} Auto-Review*',
         });
         if (ref.severity === 'blocker')       blockers++;
         else if (ref.severity === 'important') important++;
@@ -157,7 +158,7 @@ async function executeReview(
       (minor > 0 ? `🟢 ${minor} minor` : '') || '✅ 리뷰 완료';
 
     const reviewBody = [
-      `**ThomasShelby Auto-Review** | ${owner}/${repo}#${prNumber}`,
+      `**${config.botName} Auto-Review** | ${owner}/${repo}#${prNumber}`,
       `**${issueCount}**`,
     ].filter(Boolean).join('\n');
 
@@ -167,7 +168,7 @@ async function executeReview(
         await postInlineReview(owner, repo, prNumber, headSha!, reviewBody, reviewEvent, inlineComments);
         logger.info(`[review-executor] Inline review posted (${inlineComments.length} comments) to ${owner}/${repo}#${prNumber}`);
       } else {
-        await postComment(owner, repo, prNumber, reviewBody + '\n\n---\n*— ThomasShelby*');
+        await postComment(owner, repo, prNumber, reviewBody + `\n\n---\n*— ${config.botName}*`);
         logger.info(`[review-executor] No inline positions found; posted single comment to ${owner}/${repo}#${prNumber}`);
       }
       commentPosted = true;

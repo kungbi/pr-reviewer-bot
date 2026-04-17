@@ -5,6 +5,7 @@
 
 import axios from 'axios';
 import logger from '../utils/logger';
+import config from '../utils/config';
 import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from '../utils/errors';
 import { PRDetails, InlineComment, ReviewEvent } from '../types';
 
@@ -15,7 +16,7 @@ function getHeaders(): Record<string, string> {
   return {
     Authorization: `token ${token}`,
     Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'kungbi-pr-reviewer-bot',
+    'User-Agent': config.botName,
   };
 }
 

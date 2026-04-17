@@ -40,14 +40,20 @@ const config = {
   // GitHub — token is optional when `gh auth login` is already done
   ghToken: optional('GH_TOKEN', null),
 
-  // Webhook HMAC secret (required for security)
-  webhookSecret: required('WEBHOOK_SECRET'),
+  // Webhook HMAC secret (unused in polling mode, kept for compatibility)
+  webhookSecret: optional('WEBHOOK_SECRET', null),
 
   // Discord incoming webhook URL (required for notifications)
   discordWebhookUrl: required('DISCORD_WEBHOOK_URL'),
 
   // Bot display name
   botName: optional('BOT_NAME', 'kungbi-spider') as string,
+
+  // Bot avatar URL for Discord notifications
+  botAvatarUrl: optional('BOT_AVATAR_URL', 'https://github.com/kungbi-spider.png') as string,
+
+  // GitHub username to poll review requests for
+  githubReviewer: optional('GH_REVIEWER', 'backend-woongbi') as string,
 
   // HTTP server port
   port: optionalInt('PORT', 3000),
