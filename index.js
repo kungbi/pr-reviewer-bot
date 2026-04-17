@@ -7,11 +7,10 @@
  * State is tracked in state/reviewed-prs.json via ReviewedPRsState.
  */
 
-const logger = require('./src/utils/logger');
-const { startPolling, loadEnv } = require('./src/polling/poller');
+require('dotenv').config({ path: '/home/node/.openclaw/workspace/kungbi-pr-reviewer-bot/.env' });
 
-// Load .env into process.env before anything else
-loadEnv();
+const logger = require('./src/utils/logger');
+const { startPolling } = require('./src/polling/poller');
 
 const POLL_INTERVAL_MINUTES = parseInt(process.env.POLL_INTERVAL_MINUTES || '5', 10);
 

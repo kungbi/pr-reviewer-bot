@@ -5,17 +5,6 @@ const path = require('path');
 const { executeReviewWithRetry } = require('../review/polling-reviewer');
 const { executeReview } = require('../review/review-executor');
 
-// Load .env file into process.env so all modules can read it
-const ENV_FILE = '/home/node/.openclaw/workspace/kungbi-pr-reviewer-bot/.env';
-function loadEnv() {
-  try {
-    const content = fs.readFileSync(ENV_FILE, 'utf8');
-    content.split('\n').forEach(line => {
-      const match = line.match(/^\s*([\w]+)\s*=\s*(.*)$/);
-      if (match) process.env[match[1]] = match[2];
-    });
-  } catch (e) { /* ignore */ }
-}
 
 const GH_API = 'https://api.github.com';
 
@@ -104,7 +93,6 @@ function getRepoInfo(pr) {
  * Poll for PRs assigned to the bot user
  */
 async function pollAssignedPRs() {
-  loadEnv();
   console.log('[POLLER] Checking for assigned PRs...');
 
   try {
@@ -219,5 +207,4 @@ function startPolling(intervalMinutes = 5) {
 module.exports = {
   pollAssignedPRs,
   startPolling,
-  loadEnv,
 };
