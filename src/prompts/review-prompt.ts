@@ -7,48 +7,17 @@ interface ReviewPromptParams {
   owner: string;
   repo: string;
   prNumber: number;
-  prTitle: string;
-  prUrl: string;
-  diff: string;
 }
 
-export function buildAnalysisPrompt({ owner, repo, prNumber, prTitle, prUrl, diff }: ReviewPromptParams): string {
-  return `You are using the kungbi-pr-review skill to review a GitHub Pull Request.
+export function buildAnalysisPrompt({ owner, repo, prNumber }: ReviewPromptParams): string {
+  return `${owner}/${repo} 레포지토리의 PR #${prNumber} 를 리뷰해줘.
 
-## PR Info
-- Repository: ${owner}/${repo}
-- PR Number: #${prNumber}
-- Title: ${prTitle}
-- URL: ${prUrl}
+gh pr view, gh pr diff, gh api 등을 사용해서 직접 탐색해:
+- PR 설명과 제목을 먼저 읽고 비즈니스 요구사항을 파악해
+- 변경된 파일의 전체 내용을 읽어 컨텍스트를 이해해
+- PR 설명의 요구사항과 실제 코드가 일치하는지 확인해
 
-## Diff
-\`\`\`diff
-${diff}
-\`\`\`
-
-## Instructions
-Analyze the diff above and produce a structured review. Each issue you raise will be posted as an **inline comment** directly on the relevant line, so the per-issue body must be self-contained and detailed.
-
-1. Review across all 6 axes:
-   - Correctness (logic errors, edge cases, null handling)
-   - Security (injection, auth bypass, sensitive data exposure)
-   - Performance (N+1 queries, unnecessary loops, memory leaks)
-   - Reliability (error handling, timeouts, retries)
-   - Maintainability (code duplication, dead code, naming)
-   - Architecture (coupling, design patterns)
-
-2. Severity levels:
-   - Blocker: security vulnerabilities, data corruption, crash risk
-   - Important: bugs, performance degradation, bad validation
-   - Minor: code smells, maintainability
-
-3. For EVERY issue, include the following fields (write in Korean):
-   - **[근거]** 관련 규칙/표준 (OWASP, CWE, RFC 등) — URL도 포함
-   - **문제** 이 코드가 왜 문제인지
-   - **영향** 실제로 발생할 수 있는 결과
-   - **수정 제안** 구체적 수정 방법 (가능하면 코드 예시 포함)
-
-4. Output format (write EVERYTHING in Korean):
+리뷰 결과는 반드시 아래 형식으로 출력해 (한국어로):
 
 ## PR Review
 
@@ -72,6 +41,6 @@ Analyze the diff above and produce a structured review. Each issue you raise wil
 
 IMPORTANT:
 - **file:line 형식의 헤더가 반드시 필요** — 없으면 인라인 코멘트로 등록 불가
-- 모든 이슈에 근거, 문제, 영향, 수정 제시안 4개 필드 빠짐없이 작성
-- 출력은 한국어로만 작성`;
+- 모든 이슈에 근거, 문제, 영향, 수정 제안 4개 필드 빠짐없이 작성
+- PR 설명의 비즈니스 요구사항과 코드가 다르면 반드시 Blocker로 보고`;
 }

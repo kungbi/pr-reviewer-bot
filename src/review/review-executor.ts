@@ -107,7 +107,7 @@ async function executeReview(
     }
 
     // ── 4. Build prompt & run AI analysis ────────────────────────────────────
-    const prompt = buildAnalysisPrompt({ owner, repo, prNumber, prTitle, prUrl, diff });
+    const prompt = buildAnalysisPrompt({ owner, repo, prNumber });
 
     let reviewReport: string;
     try {
