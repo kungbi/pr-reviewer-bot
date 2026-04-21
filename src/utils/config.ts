@@ -32,6 +32,14 @@ function optionalInt(name: string, defaultValue: number): number {
   return parsed;
 }
 
+function optionalBool(name: string, defaultValue: boolean): boolean {
+  const value = process.env[name];
+  if (value === undefined || value === null || value.trim() === '') {
+    return defaultValue;
+  }
+  return value.trim() === 'true' || value.trim() === '1';
+}
+
 // ── Config Object ─────────────────────────────────────────────────────────────
 
 const VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
@@ -71,6 +79,11 @@ const config = {
 
   // Polling interval in seconds
   pollInterval: optionalInt('POLL_INTERVAL', 5),
+
+  // Repo-clone based PR review
+  prCloneEnabled: optionalBool('PR_CLONE_ENABLED', true),
+  prCloneDepth: optionalInt('PR_CLONE_DEPTH', 200),
+  prCloneTimeoutMs: optionalInt('PR_CLONE_TIMEOUT_MS', 90000),
 };
 
 // ── Startup Summary ──────────────────────────────────────────────────────────
@@ -84,6 +97,9 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  GH_TOKEN       : ${config.ghToken ? '***set***' : '(using gh auth)'}`);
   console.log(`  WEBHOOK_SECRET : ***set***`);
   console.log(`  DISCORD_WEBHOOK: ***set***`);
+  console.log(`  PR_CLONE_ENABLED    : ${config.prCloneEnabled}`);
+  console.log(`  PR_CLONE_DEPTH      : ${config.prCloneDepth}`);
+  console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
 }
 
 export default config;

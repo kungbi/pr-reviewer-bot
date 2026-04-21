@@ -6,26 +6,35 @@
  */
 import { spawn } from 'child_process';
 
-export async function sessions_spawn(prompt: string): Promise<string> {
+interface SpawnOptions {
+  cwd?: string;
+}
+
+export async function sessions_spawn(prompt: string, options?: SpawnOptions): Promise<string> {
   console.log('[sessions_spawn] Spawning claude -p for analysis...');
 
   return new Promise((resolve, reject) => {
+    const spawnOpts: Parameters<typeof spawn>[2] = {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5 * 60 * 1000, // 5분
+    };
+    if (options?.cwd) {
+      spawnOpts.cwd = options.cwd;
+    }
+
     const proc = spawn('claude', [
       '-p',
       '--dangerously-skip-permissions',
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5 * 60 * 1000, // 5분
-    });
+    ], spawnOpts);
 
     let output = '';
     let errorOutput = '';
 
-    proc.stdout.on('data', (data: Buffer) => {
+    proc.stdout!.on('data', (data: Buffer) => {
       output += data.toString();
     });
 
-    proc.stderr.on('data', (data: Buffer) => {
+    proc.stderr!.on('data', (data: Buffer) => {
       errorOutput += data.toString();
     });
 
@@ -45,7 +54,7 @@ export async function sessions_spawn(prompt: string): Promise<string> {
     });
 
     // 프롬프트를 stdin으로 전달
-    proc.stdin.write(prompt);
-    proc.stdin.end();
+    proc.stdin!.write(prompt);
+    proc.stdin!.end();
   });
 }
