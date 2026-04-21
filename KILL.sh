@@ -13,7 +13,7 @@ PID=$(lsof -ti tcp:"$PORT" 2>/dev/null || true)
 
 if [ -z "$PID" ]; then
   # Fallback: find by process name
-  PID=$(pgrep -f "node index.js" 2>/dev/null || true)
+  PID=$(pgrep -f "node dist/src/index.js" 2>/dev/null || true)
 fi
 
 if [ -z "$PID" ]; then

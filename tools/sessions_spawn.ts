@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * sessions_spawn — Claude CLI로 AI 분석 실행
  *

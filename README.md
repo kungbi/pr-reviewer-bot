@@ -28,7 +28,7 @@ Discord 알림 (리뷰 시작 / 완료)
 
 ```
 kungbi-pr-reviewer-bot/
-├── index.js                  # 엔트리포인트 (폴링 시작)
+├── src/index.ts              # 엔트리포인트 (폴링 시작)
 ├── src/
 │   ├── poller.js             # cron 폴링 (5분 간격)
 │   ├── polling-reviewer.js   # 재시도 래퍼
@@ -78,19 +78,11 @@ LOG_LEVEL=INFO
 
 ## 실행
 
-Docker Compose (권장):
-
-```bash
-docker compose up -d pr-reviewer
-docker compose logs -f pr-reviewer
-```
-
-직접 실행:
-
 ```bash
 npm install
 cp .env.example .env   # .env 편집 후
-node index.js
+npm run build
+npm start
 ```
 
 ---
