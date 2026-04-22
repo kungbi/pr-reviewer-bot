@@ -78,12 +78,15 @@ const config = {
   })(),
 
   // Polling interval in seconds
-  pollInterval: optionalInt('POLL_INTERVAL', 5),
+  pollIntervalMin: optionalInt('POLL_INTERVAL_MIN', 5),
 
   // Repo-clone based PR review
   prCloneEnabled: optionalBool('PR_CLONE_ENABLED', true),
   prCloneDepth: optionalInt('PR_CLONE_DEPTH', 200),
   prCloneTimeoutMs: optionalInt('PR_CLONE_TIMEOUT_MS', 90000),
+
+  // Claude CLI timeout for the review subagent (minutes → ms)
+  reviewTimeoutMs: optionalInt('REVIEW_TIMEOUT_MIN', 20) * 60 * 1000,
 };
 
 // ── Startup Summary ──────────────────────────────────────────────────────────
@@ -93,7 +96,7 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  BOT_NAME       : ${config.botName}`);
   console.log(`  PORT           : ${config.port}`);
   console.log(`  LOG_LEVEL      : ${config.logLevel}`);
-  console.log(`  POLL_INTERVAL  : ${config.pollInterval}s`);
+  console.log(`  POLL_INTERVAL  : ${config.pollIntervalMin}min`);
   console.log(`  GH_TOKEN       : ${config.ghToken ? '***set***' : '(using gh auth)'}`);
   console.log(`  WEBHOOK_SECRET : ***set***`);
   console.log(`  DISCORD_WEBHOOK: ***set***`);

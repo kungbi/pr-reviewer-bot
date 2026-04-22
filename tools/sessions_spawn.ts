@@ -5,6 +5,7 @@
  * 결과 텍스트를 반환한다.
  */
 import { spawn } from 'child_process';
+import config from '../src/utils/config';
 
 interface SpawnOptions {
   cwd?: string;
@@ -16,7 +17,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
   return new Promise((resolve, reject) => {
     const spawnOpts: Parameters<typeof spawn>[2] = {
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5 * 60 * 1000, // 5분
+      timeout: config.reviewTimeoutMs,
     };
     if (options?.cwd) {
       spawnOpts.cwd = options.cwd;
