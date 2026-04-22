@@ -5,7 +5,7 @@
  * 결과 텍스트를 반환한다.
  */
 import { spawn } from 'child_process';
-import config from '../src/utils/config';
+import config from './config';
 
 interface SpawnOptions {
   cwd?: string;

@@ -9,7 +9,7 @@
 
 import { getPRDetails, getPRHeadSha, postComment } from '../github';
 import { buildAnalysisPrompt } from '../review-prompt';
-import { sessions_spawn } from '../../tools/sessions_spawn';
+import { sessions_spawn } from '../utils/sessions_spawn';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
 import ReviewedPRsState, { STATE_FILE } from '../utils/state-manager';
 import logger from '../utils/logger';
