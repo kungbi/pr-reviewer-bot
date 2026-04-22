@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc",
+    "test": "jest",
     "start": "npm run build && pm2 start ecosystem.config.js",
     "stop": "pm2 stop pr-reviewer-bot",
     "restart": "npm run build && pm2 restart pr-reviewer-bot",
@@ -27,6 +28,9 @@
     "pm2": "^6.0.14"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0"
+    "@types/jest": "^30.0.0",
+    "@types/node": "^25.6.0",
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.9"
   }
 }

@@ -9,3 +9,4 @@ dist/
 .omc/
 .bot.pid
 logs/
+coverage/
