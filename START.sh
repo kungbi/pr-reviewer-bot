@@ -44,6 +44,9 @@ if [ -z "$DISCORD_WEBHOOK_URL" ]; then
   exit 1
 fi
 
+echo "[START] Building ..."
+npm run build
+
 echo "[START] Starting Kungbi PR Reviewer Bot (PORT=${PORT:-3000}) ..."
 
 # Write PID and clean up on exit
