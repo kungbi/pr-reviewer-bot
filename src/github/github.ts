@@ -115,20 +115,6 @@ const postReview = createRetryFunction(async (owner: unknown, repo: unknown, prN
 }, 3, 1000) as (owner: string, repo: string, prNumber: number, body: string, event: ReviewEvent) => Promise<unknown>;
 
 /**
- * Execute a GraphQL query
- */
-const graphQLQuery = createRetryFunction(async (query: unknown, variables: unknown = {}): Promise<unknown> => {
-  logger.info('Executing GraphQL query');
-  const res = await axios.post(
-    'https://api.github.com/graphql',
-    { query, variables },
-    { headers: getHeaders() }
-  );
-  checkRateLimit(res.headers as Record<string, string>);
-  return res.data;
-}, 3, 1000) as (query: string, variables?: Record<string, unknown>) => Promise<unknown>;
-
-/**
  * Get the head commit SHA for a PR
  */
 const getPRHeadSha = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown): Promise<string> => {
@@ -189,5 +175,4 @@ export {
   postReview,
   getPRHeadSha,
   postInlineReview,
-  graphQLQuery,
 };

@@ -3,7 +3,7 @@ import path from 'path';
 import { sendDiscordNotification } from '../notification/discord-notifier';
 import { buildCommentReplyPrompt } from '../prompts/comment-prompt';
 import ReviewedPRsState from '../utils/state-manager';
-import { sessions_spawn } from '../utils/sessions-wrapper';
+import { sessions_spawn } from '../../tools/sessions_spawn';
 
 const STATE_FILE = path.join(__dirname, '../../state/reviewed-prs.json');
 

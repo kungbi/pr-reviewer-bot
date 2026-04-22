@@ -4,12 +4,9 @@
  * PR 리뷰 실행 래퍼 — 실패 시 재시도 로직 포함.
  */
 
-import path from 'path';
-import ReviewedPRsState, { MAX_RETRIES } from '../utils/state-manager';
+import ReviewedPRsState, { MAX_RETRIES, STATE_FILE } from '../utils/state-manager';
 import logger from '../utils/logger';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
-
-const STATE_FILE = path.join(process.cwd(), 'state/reviewed-prs.json');
 
 /**
  * 상태 파일 로드 헬퍼 (singleton per run)
@@ -69,39 +66,7 @@ async function executeReviewWithRetry(
   }
 }
 
-/**
- * PR 목록을 순회하면서 미리뷰 PR 처리.
- */
-async function processPRList(
-  prs: PRInfo[],
-  reviewFn: (prInfo: PRInfo) => Promise<ReviewResult>
-): Promise<Array<{ prLabel: string } & Partial<RetryOutcome> & { reason?: string }>> {
-  const state = loadState();
-  const results: Array<{ prLabel: string } & Partial<RetryOutcome> & { reason?: string }> = [];
-
-  for (const prInfo of prs) {
-    const { owner, repo, prNumber } = prInfo;
-    const prLabel = `${owner}/${repo}#${prNumber}`;
-
-    if (state.isPRReviewed(owner, repo, prNumber)) {
-      logger.debug(`[PollingReviewer] Skipping already reviewed PR ${prLabel}`);
-      results.push({ prLabel, skipped: true, reason: 'already_reviewed' });
-      continue;
-    }
-
-    const outcome = await executeReviewWithRetry(prInfo, reviewFn);
-    results.push({ prLabel, ...outcome });
-
-    if (outcome.success) {
-      state.markPRReviewed(owner, repo, prNumber, 'reviewed');
-    }
-  }
-
-  return results;
-}
-
 export {
   executeReviewWithRetry,
-  processPRList,
   MAX_RETRIES,
 };

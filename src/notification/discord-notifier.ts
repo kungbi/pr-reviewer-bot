@@ -4,17 +4,11 @@
 
 import { DiscordEmbed, DiscordField, NotificationData } from '../types';
 import config from '../utils/config';
+import { sleep } from '../utils/errors';
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
-
-/**
- * Sleep utility for retry delays
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 /**
  * Send a POST request to Discord webhook
@@ -186,7 +180,7 @@ async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle,
 /**
  * Notify when a reply is needed on a comment
  */
-async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, prTitle, prUrl, commenter, commentId }: NotificationData): Promise<boolean> {
+async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, prTitle, prUrl, commenter }: NotificationData): Promise<boolean> {
   const embed = buildEmbed({
     title: `💬 Reply Needed - #${prNumber}`,
     description: `**@${commenter}** mentioned the bot and requires a reply on **${prTitle}**.`,

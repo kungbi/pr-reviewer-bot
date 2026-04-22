@@ -1,7 +1,10 @@
 import fs from 'fs';
+import path from 'path';
+import logger from './logger';
 import { PRStatus, PRStateEntry, StateFile } from '../types';
 
 const MAX_RETRIES = 3;
+export const STATE_FILE = path.join(process.cwd(), 'state/reviewed-prs.json');
 
 class ReviewedPRsState {
   stateFilePath: string;
@@ -26,7 +29,7 @@ class ReviewedPRsState {
           this.data = parsed as StateFile;
         } else if (Array.isArray(parsed)) {
           // Legacy flat-array format — migrate to object format, preserving keys
-          console.warn('[StateManager] Migrating legacy flat-array state to object format');
+          logger.warn('[StateManager] Migrating legacy flat-array state to object format');
           const reviewedPRs: Record<string, PRStateEntry> = {};
           for (const key of parsed as string[]) {
             const m = key.match(/^([^/]+)\/([^#]+)#(\d+)$/);
@@ -37,12 +40,12 @@ class ReviewedPRsState {
           this.data = { reviewedPRs, repliedComments: {} };
           this.save();
         } else {
-          console.warn('[StateManager] State file has unexpected format, resetting to defaults');
+          logger.warn('[StateManager] State file has unexpected format, resetting to defaults');
           this.data = { reviewedPRs: {}, repliedComments: {} };
         }
       }
     } catch (error) {
-      console.error(`[StateManager] Failed to load state: ${(error as Error).message}`);
+      logger.error(`[StateManager] Failed to load state: ${(error as Error).message}`);
       this.data = { reviewedPRs: {}, repliedComments: {} };
     }
   }
@@ -53,7 +56,7 @@ class ReviewedPRsState {
       fs.writeFileSync(tempFilePath, JSON.stringify(this.data, null, 2), 'utf8');
       fs.renameSync(tempFilePath, this.stateFilePath);
     } catch (error) {
-      console.error(`[StateManager] Failed to save state: ${(error as Error).message}`);
+      logger.error(`[StateManager] Failed to save state: ${(error as Error).message}`);
       throw error;
     }
   }
