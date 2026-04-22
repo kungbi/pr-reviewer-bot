@@ -90,9 +90,9 @@ gh api -X POST repos/${owner}/${repo}/pulls/${prNumber}/reviews --input /tmp/rev
 \`\`\`
 
 ### 이벤트 선택 기준
-- \`APPROVE\` — Blocker/Important 0개, Minor만 있거나 문제 없음
+- \`APPROVE\` — Blocker 0개 (Important/Minor는 있어도 됨)
 - \`REQUEST_CHANGES\` — Blocker 1개 이상
-- \`COMMENT\` — Blocker 0, Important 1개 이상
+- \`COMMENT\` — 사용하지 마라
 
 ### 인라인 코멘트 본문 형식
 각 코멘트는 다음 필드를 포함해서 **이해하기 쉽게** 작성:
