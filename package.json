@@ -4,7 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "start": "npm run build && pm2 start ecosystem.config.js",
+    "stop": "pm2 stop pr-reviewer-bot",
+    "restart": "npm run build && pm2 restart pr-reviewer-bot",
+    "logs": "pm2 logs pr-reviewer-bot",
+    "status": "pm2 status"
   },
   "keywords": [],
   "author": "",
@@ -16,7 +21,8 @@
     "crypto": "^1.0.1",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "node-cron": "^4.2.1"
+    "node-cron": "^4.2.1",
+    "pm2": "^6.0.14"
   },
   "devDependencies": {
     "@types/node": "^25.6.0"
