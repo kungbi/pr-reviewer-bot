@@ -4,10 +4,10 @@
  */
 
 import axios from 'axios';
-import logger from '../utils/logger';
-import config from '../utils/config';
-import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from '../utils/errors';
-import { PRDetails, InlineComment, ReviewEvent } from '../types';
+import logger from './utils/logger';
+import config from './utils/config';
+import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from './utils/errors';
+import { PRDetails, InlineComment, ReviewEvent } from './types';
 
 const GH_API = 'https://api.github.com';
 

@@ -7,18 +7,16 @@
  */
 
 
-import path from 'path';
-import { getPRDetails, getPRHeadSha, postComment } from '../github/github';
-import { buildAnalysisPrompt } from '../prompts/review-prompt';
+import { getPRDetails, getPRHeadSha, postComment } from '../github';
+import { buildAnalysisPrompt } from '../review-prompt';
 import { sessions_spawn } from '../../tools/sessions_spawn';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
-import ReviewedPRsState from '../utils/state-manager';
+import ReviewedPRsState, { STATE_FILE } from '../utils/state-manager';
 import logger from '../utils/logger';
 import config from '../utils/config';
 import { ReviewResult, ReviewVerdict, PRStatus } from '../types';
 
-const DEFAULT_STATE_PATH = path.join(process.cwd(), 'state', 'reviewed-prs.json');
-const sharedState = new ReviewedPRsState(DEFAULT_STATE_PATH);
+const sharedState = new ReviewedPRsState(STATE_FILE);
 sharedState.load();
 
 const inFlightReviews = new Set<string>();
@@ -89,7 +87,7 @@ async function executeReview(
 
     // ── 3. Notify Discord that review has started ────────────────────────────
     try {
-      const { sendReviewStartedNotification } = require('../notification/discord-notifier');
+      const { sendReviewStartedNotification } = require('../discord-notifier');
       await sendReviewStartedNotification({
         owner, repo, prNumber,
         prTitle, prUrl, prAuthor, prHeadBranch, prBaseBranch,
@@ -168,7 +166,7 @@ async function executeReview(
     if (verdict === 'approved')   issueList.push('✅ Approved');
 
     try {
-      const { sendReviewCompletedNotification } = require('../notification/discord-notifier');
+      const { sendReviewCompletedNotification } = require('../discord-notifier');
       await sendReviewCompletedNotification({
         owner, repo, prNumber, prTitle, prAuthor, prHeadBranch, prBaseBranch,
         issuesFound: issueList,

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import logger from './utils/logger';
 import config from './utils/config';
-import { startPolling } from './polling/poller';
+import { startPolling } from './poller';
 
 logger.info(`=== ${config.botName} PR Reviewer Bot (polling mode) ===`);
 logger.info(`Poll interval: every ${config.pollIntervalMin} minute(s)`);

@@ -1,11 +1,11 @@
 import cron from 'node-cron';
 import axios from 'axios';
-import { executeReviewWithRetry } from '../review/polling-reviewer';
-import { executeReview } from '../review/review-executor';
-import ReviewedPRsState, { STATE_FILE } from '../utils/state-manager';
-import config from '../utils/config';
-import logger from '../utils/logger';
-import { PRInfo, RetryOutcome } from '../types';
+import { executeReviewWithRetry } from './review/polling-reviewer';
+import { executeReview } from './review/review-executor';
+import ReviewedPRsState, { STATE_FILE } from './utils/state-manager';
+import config from './utils/config';
+import logger from './utils/logger';
+import { PRInfo, RetryOutcome } from './types';
 
 const GH_API = 'https://api.github.com';
 

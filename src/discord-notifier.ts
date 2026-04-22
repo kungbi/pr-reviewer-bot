@@ -2,9 +2,9 @@
  * Discord Notifier - Sends notifications to Discord via webhook
  */
 
-import { DiscordEmbed, DiscordField, NotificationData } from '../types';
-import config from '../utils/config';
-import { sleep } from '../utils/errors';
+import { DiscordEmbed, DiscordField, NotificationData } from './types';
+import config from './utils/config';
+import { sleep } from './utils/errors';
 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const MAX_RETRIES = 3;
