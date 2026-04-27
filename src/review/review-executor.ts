@@ -144,6 +144,18 @@ async function executeReview(
       } catch (err) {
         logger.error(`[review-executor] Failed to post fallback comment: ${(err as Error).message}`);
       }
+
+      try {
+        const { sendReviewFailedNotification } = require('../discord-notifier');
+        await sendReviewFailedNotification({
+          owner, repo, prNumber,
+          prTitle, prAuthor, prHeadBranch, prBaseBranch,
+          errorMessage: 'Claude 서브에이전트 실행 실패',
+          permanentlySkipped: false,
+        });
+      } catch (err) {
+        logger.warn(`[review-executor] Discord failure notification failed: ${(err as Error).message}`);
+      }
     } else {
       commentPosted = true;
     }

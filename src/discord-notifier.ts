@@ -201,6 +201,43 @@ async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, pr
 }
 
 /**
+ * Notify when a review has failed or been permanently skipped
+ */
+async function sendReviewFailedNotification({ owner, repo, prNumber, prTitle, prAuthor = null, prHeadBranch = null, prBaseBranch = null, errorMessage, permanentlySkipped = false }: NotificationData & { errorMessage?: string; permanentlySkipped?: boolean }): Promise<boolean> {
+  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+
+  const title = permanentlySkipped
+    ? `🚫 리뷰 영구 스킵 - #${prNumber}`
+    : `❌ 리뷰 실패 - #${prNumber}`;
+
+  const description = permanentlySkipped
+    ? `**${prTitle}**\n최대 재시도 횟수를 초과하여 리뷰가 영구적으로 스킵되었습니다.`
+    : `**${prTitle}**\n리뷰 중 오류가 발생했습니다.`;
+
+  const fields: DiscordField[] = [
+    { name: 'Repository', value: `${owner}/${repo}`, inline: true },
+    { name: 'PR Number', value: `#${prNumber}`, inline: true },
+  ];
+  if (prAuthor) fields.push({ name: 'Author', value: `@${prAuthor}`, inline: true });
+  if (prHeadBranch && prBaseBranch) fields.push({ name: 'Branch', value: `\`${prHeadBranch}\` → \`${prBaseBranch}\``, inline: false });
+  if (errorMessage) fields.push({ name: 'Error', value: errorMessage.slice(0, 1024), inline: false });
+
+  const embed = buildEmbed({
+    title,
+    description,
+    color: permanentlySkipped ? 0x6B7280 : 0xF97316, // Gray for skipped, Orange for failed
+    url: prUrl,
+    fields,
+  });
+
+  return sendWebhook({
+    username: config.botName,
+    avatar_url: config.botAvatarUrl,
+    embeds: [embed],
+  });
+}
+
+/**
  * Notify when a review has started
  */
 async function sendReviewStartedNotification({ owner, repo, prNumber, prTitle, prUrl, prAuthor = null, prHeadBranch = null, prBaseBranch = null }: NotificationData): Promise<boolean> {
@@ -232,4 +269,5 @@ export {
   sendReviewCompletedNotification,
   sendCommentNeededNotification,
   sendReviewStartedNotification,
+  sendReviewFailedNotification,
 };

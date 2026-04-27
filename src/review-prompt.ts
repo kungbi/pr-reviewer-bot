@@ -68,7 +68,7 @@ cat > /tmp/review-${prNumber}.json <<'EOF'
 {
   "commit_id": "<HEAD_SHA>",
   "event": "REQUEST_CHANGES",
-  "body": "전체 리뷰 요약 (한두 문단, 한국어). 주요 이슈 카테고리와 총평.",
+  "body": "전체 리뷰 요약 (한두 문단, 한국어). 주요 이슈 카테고리와 총평.\\n\\n— Reviewed by Kungbi's bot",
   "comments": [
     {
       "path": "src/foo/bar.ts",

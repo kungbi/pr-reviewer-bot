@@ -29,4 +29,5 @@ export interface NotificationData {
   action?: string;
   commenter?: string;
   commentId?: string | number;
+  errorMessage?: string;
 }

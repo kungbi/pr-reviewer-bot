@@ -5,6 +5,7 @@
  */
 
 import ReviewedPRsState, { MAX_RETRIES, STATE_FILE } from '../utils/state-manager';
+import { sendReviewFailedNotification } from '../discord-notifier';
 import logger from '../utils/logger';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
 
@@ -56,6 +57,16 @@ async function executeReviewWithRetry(
       logger.error(
         `[PollingReviewer] [${timestamp}] PR ${prLabel} has failed ${newCount}/${MAX_RETRIES} times — permanently skipping`
       );
+      try {
+        await sendReviewFailedNotification({
+          owner, repo, prNumber,
+          prTitle: title ?? `PR #${prNumber}`,
+          errorMessage: errMsg,
+          permanentlySkipped: true,
+        });
+      } catch (notifyErr) {
+        logger.warn(`[PollingReviewer] Discord skip notification failed: ${(notifyErr as Error).message}`);
+      }
       return { success: false, skipped: true, retryCount: newCount, error: errMsg };
     }
 
