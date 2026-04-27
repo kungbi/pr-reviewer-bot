@@ -54,6 +54,12 @@ const config = {
   // Discord incoming webhook URL (required for notifications)
   discordWebhookUrl: required('DISCORD_WEBHOOK_URL'),
 
+  // Discord Bot Token for receiving manual review commands
+  discordBotToken: optional('DISCORD_BOT_TOKEN', null),
+
+  // Discord Channel ID to watch for manual review triggers
+  discordChannelId: optional('DISCORD_CHANNEL_ID', null),
+
   // Bot display name
   botName: optional('BOT_NAME', 'kungbi-spider') as string,
 
