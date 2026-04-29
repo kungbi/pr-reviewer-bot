@@ -50,13 +50,16 @@ async function executeReview(
     logger.warn(`[review-executor] Could not fetch head SHA: ${(err as Error).message}`);
   }
 
-  if (state.isPRCompleted(owner, repo, prNumber)) {
-    logger.info(`[review-executor] PR already completed, skipping: ${owner}/${repo}#${prNumber}`);
-    return { success: true, verdict: 'already_reviewed', commentPosted: false };
-  }
-
-  if (state.isPRReviewed(owner, repo, prNumber, headSha)) {
-    logger.info(`[review-executor] PR already reviewed at this SHA, skipping: ${owner}/${repo}#${prNumber}`);
+  if (headSha) {
+    if (state.isPRReviewed(owner, repo, prNumber, headSha)) {
+      logger.info(`[review-executor] PR already reviewed at current SHA, skipping: ${owner}/${repo}#${prNumber}`);
+      return { success: true, verdict: 'already_reviewed', commentPosted: false };
+    }
+    if (state.isPRCompleted(owner, repo, prNumber)) {
+      logger.info(`[review-executor] New commits detected on ${owner}/${repo}#${prNumber}, re-reviewing`);
+    }
+  } else if (state.isPRCompleted(owner, repo, prNumber)) {
+    logger.info(`[review-executor] PR already completed (no SHA available), skipping: ${owner}/${repo}#${prNumber}`);
     return { success: true, verdict: 'already_reviewed', commentPosted: false };
   }
 
