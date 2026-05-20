@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import axios from 'axios';
 import { executeReviewWithRetry } from './review/polling-reviewer';
 import { executeReview } from './review/review-executor';
-import ReviewedPRsState, { STATE_FILE } from './utils/state-manager';
+import { getSharedState } from './utils/state-manager';
 import config from './utils/config';
 import logger from './utils/logger';
 import { PRInfo, RetryOutcome } from './types';
@@ -48,8 +48,7 @@ async function pollAssignedPRs(): Promise<void> {
 
     if (items.length === 0) return;
 
-    const state = new ReviewedPRsState(STATE_FILE);
-    state.load();
+    const state = getSharedState();
 
     const newPRs: Array<{ pr: GitHubPRItem; owner: string; repo: string }> = [];
     for (const pr of items) {
@@ -92,12 +91,9 @@ async function pollAssignedPRs(): Promise<void> {
       results.push(...batchResults);
     }
 
-    for (const { owner, repo, pr, outcome } of results) {
-      if (outcome?.success) {
-        state.markPRReviewed(owner, repo, pr.number, 'completed');
-      }
-    }
-
+    // executeReview already records each PR's final state (verdict + headSha);
+    // no extra markPRReviewed here — it would overwrite headSha and trigger
+    // spurious re-reviews.
     const successes = results.filter(r => r.outcome?.success).length;
     const skipped = results.filter(r => r.outcome?.skipped).length;
     const failed = results.filter(r => r.outcome && !r.outcome.success && !r.outcome.skipped).length;
@@ -139,9 +135,7 @@ async function triggerReview(pr: GitHubPRItem): Promise<RetryOutcome> {
 function startPolling(intervalMinutes = 5): void {
   // Prune old completed entries so the state file does not grow unbounded.
   try {
-    const state = new ReviewedPRsState(STATE_FILE);
-    state.load();
-    state.pruneOldEntries(config.stateRetentionDays * 24 * 60 * 60 * 1000);
+    getSharedState().pruneOldEntries(config.stateRetentionDays * 24 * 60 * 60 * 1000);
   } catch (err) {
     logger.warn(`[POLLER] State prune failed: ${(err as Error).message}`);
   }

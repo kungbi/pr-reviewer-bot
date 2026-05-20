@@ -11,13 +11,10 @@ import { getPRDetails, getPRHeadSha, postComment, verifyReviewPosted } from '../
 import { buildAnalysisPrompt } from '../review-prompt';
 import { sessions_spawn } from '../utils/sessions_spawn';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
-import ReviewedPRsState, { STATE_FILE } from '../utils/state-manager';
+import ReviewedPRsState, { getSharedState } from '../utils/state-manager';
 import logger from '../utils/logger';
 import config from '../utils/config';
 import { ReviewResult, ReviewVerdict, PRStatus } from '../types';
-
-const sharedState = new ReviewedPRsState(STATE_FILE);
-sharedState.load();
 
 const inFlightReviews = new Set<string>();
 
@@ -37,7 +34,7 @@ async function executeReview(
   prNumber: number,
   stateOverride?: ReviewedPRsState
 ): Promise<ReviewResult> {
-  const state = stateOverride || sharedState;
+  const state = stateOverride || getSharedState();
 
   const startTime = Date.now();
   logger.info(`[review-executor] Starting review: ${owner}/${repo}#${prNumber}`);

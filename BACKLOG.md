@@ -6,20 +6,20 @@
 
 ## 🔴 CRITICAL
 
-### C-1. State 파일 race condition (병렬 리뷰 시 업데이트 유실)
+### C-1. State 파일 race condition (병렬 리뷰 시 업데이트 유실) — ✅ 해결됨
 - **파일:** `src/utils/state-manager.ts`, `src/poller.ts`, `src/review/review-executor.ts`
 - **증상:** `Promise.all`로 병렬 리뷰 시 `sharedState`(executor)와 `polling-reviewer`가 각각 다른 state 인스턴스를 들고 있어 마지막 저장이 이전 저장을 덮어씀
-- **수정:** 단일 state 인스턴스 공유 또는 파일 레벨 뮤텍스(proper-lockfile 등) 도입
+- **✅ 해결 (2026-05-21):** `getSharedState()` 공유 인스턴스 도입 — poller·polling-reviewer·review-executor 3곳을 단일 인스턴스로 통일. poller의 중복 `markPRReviewed('completed')` 루프도 제거
 
-### C-2. 모듈 import 시점에 STATE_FILE 경로 고정
+### C-2. 모듈 import 시점에 STATE_FILE 경로 고정 — ✅ 해결됨
 - **파일:** `src/review/review-executor.ts:19-20`
 - **증상:** import 시 `process.cwd()` 기준으로 경로 결정 → 테스트/PM2 환경에서 잘못된 파일 참조 가능
-- **수정:** `STATE_FILE`을 `__dirname` 기준 절대 경로로 변경, load()를 첫 사용 시점으로 지연
+- **✅ 해결 (2026-05-21):** `STATE_FILE`을 `__dirname` 기준 절대경로로 변경. `getSharedState()`가 첫 사용 시점에 load (import-time load 제거)
 
-### C-3. DISCORD_WEBHOOK_URL이 required()로 설정 시 봇 전체 시작 불가
+### C-3. DISCORD_WEBHOOK_URL이 required()로 설정 시 봇 전체 시작 불가 — ⛔ WON'T-FIX
 - **파일:** `src/utils/config.ts:55`
 - **증상:** Discord 미설정 시 봇이 아예 기동 안 됨. 근데 `discord-notifier.ts`는 없으면 graceful skip 처리 → 모순
-- **수정:** `DISCORD_WEBHOOK_URL`을 `optional()`로 변경
+- **⛔ WON'T-FIX (2026-05-21):** Discord 웹훅은 이 봇의 필수 의존성으로 결정 — `required()` 유지가 맞음
 
 ---
 
@@ -34,10 +34,10 @@
 - **증상:** 성공한 PR도 `markPRReviewed` 호출 안 됨
 - **수정:** `Promise.allSettled` 사용
 
-### H-3. reviewing 상태 영구 stuck (프로세스 재시작 시)
+### H-3. reviewing 상태 영구 stuck (프로세스 재시작 시) — ✅ 해결됨
 - **파일:** `src/poller.ts:75-89`, `src/utils/state-manager.ts:92-95`
 - **증상:** 리뷰 도중 프로세스 죽으면 해당 PR이 `reviewing` 상태로 고착 → 이후 영구 스킵
-- **수정:** `finally` 블록에서 상태 복구 or `reviewingAt` 기준 stale lock 타임아웃 처리
+- **✅ 해결 (2026-05-21):** `isPRReviewing()`이 `reviewingAt` 기준 stale lock 처리 — 리뷰 타임아웃 + 5분 경과 시 stale로 간주해 재리뷰
 
 ### H-4. markPRReviewed가 retry/failure 이력 덮어씀
 - **파일:** `src/utils/state-manager.ts:114-125`
@@ -129,9 +129,10 @@
 
 ## 우선순위 작업 순서
 
-1. **C-3** — DISCORD_WEBHOOK_URL optional화 (1줄 수정, 즉시 가능)
-2. **H-1, H-2** — cron async 처리 + Promise.allSettled (10분 수정)
-3. **H-3** — reviewing stuck lock 복구 (finally 블록 추가)
-4. **H-5** — Discord 입력 검증
-5. **C-1** — State race condition (가장 복잡, 단일 인스턴스 리팩터링)
-6. **C-2** — STATE_FILE 절대 경로 + lazy load
+**완료 (2026-05-21):** C-1 ✅, C-2 ✅, H-3 ✅ / C-3 ⛔ won't-fix
+
+남은 권장 순서:
+1. **H-1, H-2** — cron async 처리 + Promise.allSettled
+2. **H-5** — Discord 입력(owner/repo) 검증
+3. **H-7** — clone URL 토큰 stderr 노출 sanitize
+4. 나머지 HIGH / MEDIUM / LOW

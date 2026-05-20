@@ -4,19 +4,10 @@
  * PR 리뷰 실행 래퍼 — 실패 시 재시도 로직 포함.
  */
 
-import ReviewedPRsState, { MAX_RETRIES, STATE_FILE } from '../utils/state-manager';
+import { MAX_RETRIES, getSharedState } from '../utils/state-manager';
 import { sendReviewFailedNotification } from '../discord-notifier';
 import logger from '../utils/logger';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
-
-/**
- * 상태 파일 로드 헬퍼 (singleton per run)
- */
-function loadState(): ReviewedPRsState {
-  const state = new ReviewedPRsState(STATE_FILE);
-  state.load();
-  return state;
-}
 
 /**
  * PR 리뷰를 안전하게 실행하는 래퍼.
@@ -28,7 +19,7 @@ async function executeReviewWithRetry(
   const { owner, repo, prNumber, title } = prInfo;
   const prLabel = `${owner}/${repo}#${prNumber}`;
 
-  const state = loadState();
+  const state = getSharedState();
 
   if (state.isPRSkipped(owner, repo, prNumber)) {
     logger.warn(`[PollingReviewer] PR ${prLabel} is permanently skipped after ${MAX_RETRIES} failures — skipping`);

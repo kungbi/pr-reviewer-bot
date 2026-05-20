@@ -5,7 +5,9 @@ import config from './config';
 import { PRStatus, PRStateEntry, StateFile } from '../types';
 
 const MAX_RETRIES = 3;
-export const STATE_FILE = path.join(process.cwd(), 'state/reviewed-prs.json');
+// Resolved from this module's location (dist/src/utils → project root), not
+// process.cwd(), so the path is stable regardless of where the bot is launched.
+export const STATE_FILE = path.join(__dirname, '../../../state/reviewed-prs.json');
 
 // A 'reviewing' lock older than this is treated as stale — the bot likely
 // crashed mid-review, so the PR should be re-picked instead of stuck forever.
@@ -271,6 +273,21 @@ class ReviewedPRsState {
     }
     return removed;
   }
+}
+
+let sharedInstance: ReviewedPRsState | null = null;
+
+/**
+ * Process-wide shared state instance. All call sites must use this so there
+ * is a single in-memory copy — multiple instances each doing a full-file
+ * save() would clobber each other's updates (lost-update race).
+ */
+export function getSharedState(): ReviewedPRsState {
+  if (!sharedInstance) {
+    sharedInstance = new ReviewedPRsState(STATE_FILE);
+    sharedInstance.load();
+  }
+  return sharedInstance;
 }
 
 export default ReviewedPRsState;
