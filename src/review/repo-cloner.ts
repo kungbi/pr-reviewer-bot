@@ -97,6 +97,34 @@ export async function cleanupClone(dirPath: string): Promise<void> {
   }
 }
 
+const CLONE_PREFIX = 'pr-reviewer-';
+
+/**
+ * Remove leftover PR clone directories from previous crashed runs.
+ * The per-review cleanup runs in a `finally` block, but a hard crash
+ * (OOM kill, SIGKILL) skips it — this sweep reclaims that disk on startup.
+ * MUST run before any review starts, since in-flight clones share the prefix.
+ * Returns the number of directories removed.
+ */
+export async function cleanupStaleClones(): Promise<number> {
+  const tmp = os.tmpdir();
+  let removed = 0;
+  try {
+    const entries = await fs.readdir(tmp);
+    for (const name of entries) {
+      if (!name.startsWith(CLONE_PREFIX)) continue;
+      await cleanupClone(path.join(tmp, name));
+      removed++;
+    }
+  } catch (err) {
+    logger.warn(`[repo-cloner] Stale clone sweep failed: ${(err as Error).message}`);
+  }
+  if (removed > 0) {
+    logger.info(`[repo-cloner] Swept ${removed} leftover clone director${removed === 1 ? 'y' : 'ies'}`);
+  }
+  return removed;
+}
+
 /**
  * Clone the repo for a given PR and check out its branch.
  * Returns { ok: true, path } on success, { ok: false, reason } on any failure.

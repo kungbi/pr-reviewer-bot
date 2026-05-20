@@ -25,6 +25,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
 
     const proc = spawn('claude', [
       '-p',
+      '--model', config.reviewModel,
       '--dangerously-skip-permissions',
     ], spawnOpts);
 

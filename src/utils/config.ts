@@ -93,6 +93,15 @@ const config = {
 
   // Claude CLI timeout for the review subagent (minutes → ms)
   reviewTimeoutMs: optionalInt('REVIEW_TIMEOUT_MIN', 20) * 60 * 1000,
+
+  // Claude model for the review subagent (review quality lever)
+  reviewModel: optional('REVIEW_MODEL', 'opus') as string,
+
+  // Max PRs reviewed in parallel (caps memory from concurrent Opus subagents)
+  reviewConcurrency: optionalInt('REVIEW_CONCURRENCY', 3),
+
+  // Days to keep completed PR entries in the state file before pruning
+  stateRetentionDays: optionalInt('STATE_RETENTION_DAYS', 30),
 };
 
 // ── Startup Summary ──────────────────────────────────────────────────────────
@@ -109,6 +118,9 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  PR_CLONE_ENABLED    : ${config.prCloneEnabled}`);
   console.log(`  PR_CLONE_DEPTH      : ${config.prCloneDepth}`);
   console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
+  console.log(`  REVIEW_MODEL        : ${config.reviewModel}`);
+  console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
+  console.log(`  STATE_RETENTION_DAYS: ${config.stateRetentionDays}`);
 }
 
 export default config;

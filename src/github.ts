@@ -43,6 +43,23 @@ async function checkAuth(): Promise<boolean> {
 }
 
 /**
+ * Resolve and cache the login of the account GH_TOKEN belongs to —
+ * i.e. the account that posts reviews. Cached for the process lifetime.
+ */
+let cachedBotLogin: string | null = null;
+async function getAuthenticatedLogin(): Promise<string | null> {
+  if (cachedBotLogin) return cachedBotLogin;
+  try {
+    const res = await axios.get(`${GH_API}/user`, { headers: getHeaders() });
+    cachedBotLogin = (res.data?.login as string) ?? null;
+    return cachedBotLogin;
+  } catch (err) {
+    logger.warn(`[github] Could not resolve authenticated user: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
  * Get PR details via REST API
  */
 const getPRDetails = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown): Promise<PRDetails> => {
@@ -127,6 +144,31 @@ const getPRHeadSha = createRetryFunction(async (owner: unknown, repo: unknown, p
 }, 3, 1000) as (owner: string, repo: string, prNumber: number) => Promise<string>;
 
 /**
+ * Verify the bot actually posted a review at the given HEAD SHA.
+ *
+ * A clean `claude` exit does not guarantee the subagent's
+ * `gh api .../reviews` call succeeded, so this confirms the review landed.
+ * Returns true if a submitted review by the bot exists at `headSha`.
+ */
+const verifyReviewPosted = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, headSha: unknown): Promise<boolean> => {
+  const botLogin = await getAuthenticatedLogin();
+  const res = await axios.get(
+    `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+    { headers: getHeaders() }
+  );
+  checkRateLimit(res.headers as Record<string, string>);
+  const reviews = Array.isArray(res.data) ? res.data : [];
+  return reviews.some((r: { user?: { login?: string }; commit_id?: string; state?: string }) => {
+    const atSha = r.commit_id === headSha;
+    const submitted = r.state !== 'PENDING';
+    // If the bot login could not be resolved, fall back to SHA + submitted
+    // only, to avoid forcing a false failure.
+    const byBot = botLogin ? r.user?.login === botLogin : true;
+    return atSha && submitted && byBot;
+  });
+}, 3, 1000) as (owner: string, repo: string, prNumber: number, headSha: string) => Promise<boolean>;
+
+/**
  * Post an inline review with per-line comments.
  */
 const _postInlineReviewRaw = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, headSha: unknown, body: unknown, event: unknown, comments: unknown): Promise<unknown> => {
@@ -175,4 +217,5 @@ export {
   postReview,
   getPRHeadSha,
   postInlineReview,
+  verifyReviewPosted,
 };

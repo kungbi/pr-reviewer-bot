@@ -7,7 +7,7 @@
  */
 
 
-import { getPRDetails, getPRHeadSha, postComment } from '../github';
+import { getPRDetails, getPRHeadSha, postComment, verifyReviewPosted } from '../github';
 import { buildAnalysisPrompt } from '../review-prompt';
 import { sessions_spawn } from '../utils/sessions_spawn';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
@@ -50,13 +50,17 @@ async function executeReview(
     logger.warn(`[review-executor] Could not fetch head SHA: ${(err as Error).message}`);
   }
 
+  let isReReview = false;
+  let previousSha: string | null = null;
   if (headSha) {
     if (state.isPRReviewed(owner, repo, prNumber, headSha)) {
       logger.info(`[review-executor] PR already reviewed at current SHA, skipping: ${owner}/${repo}#${prNumber}`);
       return { success: true, verdict: 'already_reviewed', commentPosted: false };
     }
     if (state.isPRCompleted(owner, repo, prNumber)) {
-      logger.info(`[review-executor] New commits detected on ${owner}/${repo}#${prNumber}, re-reviewing`);
+      isReReview = true;
+      previousSha = state.getReviewedHeadSha(owner, repo, prNumber);
+      logger.info(`[review-executor] New commits detected on ${owner}/${repo}#${prNumber}, re-reviewing (prev SHA: ${previousSha ?? 'unknown'})`);
     }
   } else if (state.isPRCompleted(owner, repo, prNumber)) {
     logger.info(`[review-executor] PR already completed (no SHA available), skipping: ${owner}/${repo}#${prNumber}`);
@@ -114,7 +118,7 @@ async function executeReview(
     let reviewOutput: string;
     let subagentFailed = false;
     try {
-      const prompt = buildAnalysisPrompt({ owner, repo, prNumber, clonePath });
+      const prompt = buildAnalysisPrompt({ owner, repo, prNumber, clonePath, isReReview, previousSha });
       logger.info(`[review-executor] Spawning review session for ${owner}/${repo}#${prNumber}${clonePath ? ' (clone mode)' : ' (gh mode)'}`);
       reviewOutput = await sessions_spawn(prompt, clonePath ? { cwd: clonePath } : undefined);
       if (!reviewOutput || !reviewOutput.trim()) {
@@ -133,9 +137,33 @@ async function executeReview(
       }
     }
 
-    // ── 5. If subagent failed, post fallback comment so PR isn't silent ──────
-    let commentPosted = false;
-    if (subagentFailed) {
+    // ── 4b. Verify the review actually landed on GitHub ──────────────────────
+    // A clean `claude` exit does not guarantee the subagent's
+    // `gh api .../reviews` call succeeded (e.g. all inline comments rejected
+    // with 422). Confirm a review by the bot exists at the current HEAD SHA.
+    let reviewMissing = false;
+    if (!subagentFailed && headSha) {
+      try {
+        const posted = await verifyReviewPosted(owner, repo, prNumber, headSha);
+        if (!posted) {
+          reviewMissing = true;
+          logger.error(`[review-executor] Subagent exited cleanly but no review found on GitHub: ${owner}/${repo}#${prNumber}`);
+        }
+      } catch (err) {
+        // Verification call itself failed — trust the subagent rather than
+        // forcing a false failure.
+        logger.warn(`[review-executor] Review verification failed, assuming posted: ${(err as Error).message}`);
+      }
+    }
+
+    // ── 5. On failure: post a fallback comment, notify Discord, then throw ───
+    // Throwing routes the PR through executeReviewWithRetry so it is retried
+    // instead of being silently recorded as completed.
+    if (subagentFailed || reviewMissing) {
+      const reason = subagentFailed
+        ? 'Claude 서브에이전트 실행 실패'
+        : '리뷰가 GitHub에 게시되지 않음';
+
       try {
         await postComment(
           owner,
@@ -143,7 +171,6 @@ async function executeReview(
           prNumber,
           `🕷️ **Auto-Review Failed**\n\nCould not complete AI analysis for #${prNumber}. Please review manually.\n\n---\n*— ${config.botName}*`
         );
-        commentPosted = true;
       } catch (err) {
         logger.error(`[review-executor] Failed to post fallback comment: ${(err as Error).message}`);
       }
@@ -153,18 +180,18 @@ async function executeReview(
         await sendReviewFailedNotification({
           owner, repo, prNumber,
           prTitle, prAuthor, prHeadBranch, prBaseBranch,
-          errorMessage: 'Claude 서브에이전트 실행 실패',
+          errorMessage: reason,
           permanentlySkipped: false,
         });
       } catch (err) {
         logger.warn(`[review-executor] Discord failure notification failed: ${(err as Error).message}`);
       }
-    } else {
-      commentPosted = true;
+
+      throw new Error(reason);
     }
 
     // ── 6. Extract verdict + update state ────────────────────────────────────
-    const verdict: ReviewVerdict = subagentFailed ? 'error' : extractVerdict(reviewOutput);
+    const verdict: ReviewVerdict = extractVerdict(reviewOutput);
     const prStatus: PRStatus = verdict === 'already_reviewed' ? 'reviewed' : verdict;
 
     try {
@@ -193,11 +220,10 @@ async function executeReview(
     const totalMs = Date.now() - startTime;
     logger.info(`[review-executor] Full review completed in ${totalMs}ms for ${owner}/${repo}#${prNumber}`);
     return {
-      success: !subagentFailed,
+      success: true,
       verdict,
-      commentPosted,
+      commentPosted: true,
       timingMs: { total: totalMs },
-      ...(subagentFailed ? { error: 'subagent failed' } : {}),
     };
   } finally {
     inFlightReviews.delete(prKey);

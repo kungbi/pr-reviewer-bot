@@ -76,11 +76,21 @@ async function pollAssignedPRs(): Promise<void> {
       state.markPRReviewing(owner, repo, pr.number);
     }
 
-    logger.info(`[POLLER] Starting parallel review of ${newPRs.length} PR(s)...`);
-    const reviewPromises = newPRs.map(({ pr, owner, repo }) =>
-      triggerReview(pr).then(outcome => ({ owner, repo, pr, outcome }))
-    );
-    const results = await Promise.all(reviewPromises);
+    const concurrency = Math.max(1, config.reviewConcurrency);
+    logger.info(`[POLLER] Reviewing ${newPRs.length} PR(s), up to ${concurrency} at a time...`);
+
+    // Review in bounded batches so concurrent Opus subagents + clones don't
+    // exhaust memory and trip PM2's max_memory_restart.
+    const results: Array<{ owner: string; repo: string; pr: GitHubPRItem; outcome: RetryOutcome }> = [];
+    for (let i = 0; i < newPRs.length; i += concurrency) {
+      const batch = newPRs.slice(i, i + concurrency);
+      const batchResults = await Promise.all(
+        batch.map(({ pr, owner, repo }) =>
+          triggerReview(pr).then(outcome => ({ owner, repo, pr, outcome }))
+        )
+      );
+      results.push(...batchResults);
+    }
 
     for (const { owner, repo, pr, outcome } of results) {
       if (outcome?.success) {
@@ -127,6 +137,15 @@ async function triggerReview(pr: GitHubPRItem): Promise<RetryOutcome> {
 }
 
 function startPolling(intervalMinutes = 5): void {
+  // Prune old completed entries so the state file does not grow unbounded.
+  try {
+    const state = new ReviewedPRsState(STATE_FILE);
+    state.load();
+    state.pruneOldEntries(config.stateRetentionDays * 24 * 60 * 60 * 1000);
+  } catch (err) {
+    logger.warn(`[POLLER] State prune failed: ${(err as Error).message}`);
+  }
+
   logger.info(`[POLLER] Starting cron job: every ${intervalMinutes} minutes`);
   cron.schedule(`*/${intervalMinutes} * * * *`, () => { pollAssignedPRs(); });
   pollAssignedPRs();

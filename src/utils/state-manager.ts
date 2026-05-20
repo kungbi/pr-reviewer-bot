@@ -1,10 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import logger from './logger';
+import config from './config';
 import { PRStatus, PRStateEntry, StateFile } from '../types';
 
 const MAX_RETRIES = 3;
 export const STATE_FILE = path.join(process.cwd(), 'state/reviewed-prs.json');
+
+// A 'reviewing' lock older than this is treated as stale — the bot likely
+// crashed mid-review, so the PR should be re-picked instead of stuck forever.
+const STALE_REVIEWING_MS = config.reviewTimeoutMs + 5 * 60 * 1000;
 
 class ReviewedPRsState {
   stateFilePath: string;
@@ -76,6 +81,15 @@ class ReviewedPRsState {
   }
 
   /**
+   * Returns the HEAD SHA recorded at the last review, or null if none.
+   * Used to compute the new-commits delta on a re-review.
+   */
+  getReviewedHeadSha(owner: string, repo: string, prNumber: number): string | null {
+    const key = this._getPRKey(owner, repo, prNumber);
+    return this.data.reviewedPRs[key]?.headSha ?? null;
+  }
+
+  /**
    * Returns true only if the PR is successfully completed or permanently skipped.
    * Does NOT return true for 'reviewing' or 'pending_retry'.
    */
@@ -88,11 +102,24 @@ class ReviewedPRsState {
 
   /**
    * Returns true if the PR is currently being reviewed (in-progress lock).
+   *
+   * A 'reviewing' entry whose `reviewingAt` is older than STALE_REVIEWING_MS
+   * (or missing/invalid) is treated as stale: the bot most likely crashed
+   * mid-review and never cleared the lock. Returning false there lets the
+   * poller re-pick the PR instead of skipping it forever.
    */
   isPRReviewing(owner: string, repo: string, prNumber: number): boolean {
     const key = this._getPRKey(owner, repo, prNumber);
     const pr = this.data.reviewedPRs[key];
-    return pr ? pr.status === 'reviewing' : false;
+    if (!pr || pr.status !== 'reviewing') return false;
+
+    const startedAt = pr.reviewingAt ? new Date(pr.reviewingAt).getTime() : NaN;
+    const age = Date.now() - startedAt;
+    if (isNaN(age) || age > STALE_REVIEWING_MS) {
+      logger.warn(`[StateManager] Stale 'reviewing' lock on ${key} — treating as not in-progress`);
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -218,6 +245,31 @@ class ReviewedPRsState {
       this.data.reviewedPRs[key].status = 'reviewed';
       this.save();
     }
+  }
+
+  /**
+   * Delete completed (terminal-status) PR entries older than maxAgeMs so the
+   * state file does not grow unbounded. In-progress / retry-pending entries
+   * are kept regardless of age. Returns the number of entries removed.
+   */
+  pruneOldEntries(maxAgeMs: number): number {
+    const terminal: PRStatus[] = ['reviewed', 'completed', 'skipped', 'approved', 'needs_work', 'blocked', 'error'];
+    const now = Date.now();
+    let removed = 0;
+    for (const key of Object.keys(this.data.reviewedPRs)) {
+      const pr = this.data.reviewedPRs[key];
+      if (!terminal.includes(pr.status)) continue;
+      const ts = pr.reviewedAt ? new Date(pr.reviewedAt).getTime() : NaN;
+      if (isNaN(ts) || now - ts > maxAgeMs) {
+        delete this.data.reviewedPRs[key];
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      this.save();
+      logger.info(`[StateManager] Pruned ${removed} completed PR entr${removed === 1 ? 'y' : 'ies'} older than ${Math.round(maxAgeMs / 86400000)}d`);
+    }
+    return removed;
   }
 }
 
