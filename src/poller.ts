@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import axios from 'axios';
 import { executeReviewWithRetry } from './review/polling-reviewer';
 import { executeReview } from './review/review-executor';
+import { getPRHeadSha } from './github';
 import { getSharedState } from './utils/state-manager';
 import config from './utils/config';
 import logger from './utils/logger';
@@ -55,17 +56,37 @@ async function pollAssignedPRs(): Promise<void> {
       const { owner, name: repo } = getRepoInfo(pr);
       const prLabel = `${owner}/${repo}#${pr.number}`;
 
-      if (state.isPRCompleted(owner, repo, pr.number)) {
-        logger.info(`[POLLER] Skipping completed: ${prLabel} - "${pr.title}"`);
-        continue;
-      }
-
       if (state.isPRReviewing(owner, repo, pr.number)) {
         logger.info(`[POLLER] Skipping in-progress: ${prLabel} - "${pr.title}"`);
         continue;
       }
 
-      logger.info(`[POLLER] New PR detected: ${prLabel} - "${pr.title}"`);
+      // Fetch the current HEAD SHA so we can tell "already reviewed at this
+      // exact SHA" apart from "reviewed earlier, but new commits since".
+      let headSha: string | null = null;
+      try {
+        headSha = await getPRHeadSha(owner, repo, pr.number);
+      } catch (err) {
+        logger.warn(`[POLLER] Could not fetch HEAD SHA for ${prLabel}: ${(err as Error).message}`);
+      }
+
+      if (headSha && state.isPRReviewed(owner, repo, pr.number, headSha)) {
+        logger.info(`[POLLER] Skipping — already reviewed at current SHA: ${prLabel}`);
+        continue;
+      }
+
+      if (state.isPRCompleted(owner, repo, pr.number)) {
+        if (!headSha) {
+          // Can't confirm new commits without a SHA — skip rather than
+          // re-review on every poll.
+          logger.info(`[POLLER] Skipping completed (HEAD SHA unavailable): ${prLabel}`);
+          continue;
+        }
+        logger.info(`[POLLER] New commits since last review, re-reviewing: ${prLabel} - "${pr.title}"`);
+      } else {
+        logger.info(`[POLLER] New PR detected: ${prLabel} - "${pr.title}"`);
+      }
+
       newPRs.push({ pr, owner, repo });
     }
 
