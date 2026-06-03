@@ -6,6 +6,8 @@
 
 import { MAX_RETRIES, getSharedState } from '../utils/state-manager';
 import { sendReviewFailedNotification } from '../discord-notifier';
+import { postComment } from '../github';
+import config from '../utils/config';
 import logger from '../utils/logger';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
 
@@ -48,6 +50,16 @@ async function executeReviewWithRetry(
       logger.error(
         `[PollingReviewer] [${timestamp}] PR ${prLabel} has failed ${newCount}/${MAX_RETRIES} times — permanently skipping`
       );
+      try {
+        await postComment(
+          owner,
+          repo,
+          prNumber,
+          `🕷️ **Auto-Review Failed**\n\nCould not complete AI analysis for #${prNumber} after ${MAX_RETRIES} attempts. Please review manually.\n\n---\n*— ${config.botName}*`
+        );
+      } catch (postErr) {
+        logger.error(`[PollingReviewer] Failed to post fallback comment: ${(postErr as Error).message}`);
+      }
       try {
         await sendReviewFailedNotification({
           owner, repo, prNumber,

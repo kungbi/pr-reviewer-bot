@@ -7,7 +7,7 @@
  */
 
 
-import { getPRDetails, getPRHeadSha, postComment, verifyReviewPosted } from '../github';
+import { getPRDetails, getPRHeadSha, verifyReviewPosted } from '../github';
 import { buildAnalysisPrompt } from '../review-prompt';
 import { sessions_spawn } from '../utils/sessions_spawn';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
@@ -153,24 +153,15 @@ async function executeReview(
       }
     }
 
-    // ── 5. On failure: post a fallback comment, notify Discord, then throw ───
-    // Throwing routes the PR through executeReviewWithRetry so it is retried
-    // instead of being silently recorded as completed.
+    // ── 5. On failure: notify Discord, then throw ───────────────────────────
+    // PR fallback comment is only posted by polling-reviewer when retries are
+    // exhausted, so transient failures don't litter the PR with duplicate
+    // "Auto-Review Failed" comments. Throwing routes the PR through
+    // executeReviewWithRetry for retry handling.
     if (subagentFailed || reviewMissing) {
       const reason = subagentFailed
         ? 'Claude 서브에이전트 실행 실패'
         : '리뷰가 GitHub에 게시되지 않음';
-
-      try {
-        await postComment(
-          owner,
-          repo,
-          prNumber,
-          `🕷️ **Auto-Review Failed**\n\nCould not complete AI analysis for #${prNumber}. Please review manually.\n\n---\n*— ${config.botName}*`
-        );
-      } catch (err) {
-        logger.error(`[review-executor] Failed to post fallback comment: ${(err as Error).message}`);
-      }
 
       try {
         const { sendReviewFailedNotification } = require('../discord-notifier');
