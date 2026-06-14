@@ -8,6 +8,8 @@
 // Note: .env is loaded by START.sh via shell export.
 // For programmatic usage, call `loadEnvFile()` below if needed.
 
+import { modelAgentMismatch, type ReviewAgent } from './agent-command';
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function required(name: string): string {
@@ -43,6 +45,37 @@ function optionalBool(name: string, defaultValue: boolean): boolean {
 // ── Config Object ─────────────────────────────────────────────────────────────
 
 const VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+
+// ── Review agent (computed early so the model default can depend on it) ─────────
+const VALID_REVIEW_AGENTS = ['claude', 'opencode'] as const;
+
+const reviewAgent: ReviewAgent = (() => {
+  const value = (optional('REVIEW_AGENT', 'claude') as string).toLowerCase();
+  if (!(VALID_REVIEW_AGENTS as readonly string[]).includes(value)) {
+    throw new Error(
+      `[config] REVIEW_AGENT must be one of ${VALID_REVIEW_AGENTS.join('|')}, got: "${value}"`
+    );
+  }
+  return value as ReviewAgent;
+})();
+
+// Model passed to the review agent (review quality lever). The two agents use
+// different model formats, so each reads its own env var — switching REVIEW_AGENT
+// alone is then safe, with no cross-format breakage:
+//   - claude   reads REVIEW_MODEL   (short alias, e.g. "opus"; default "opus")
+//   - opencode reads OPENCODE_MODEL ("provider/model", e.g. "google/gemini-2.5-flash";
+//              unset → null → opencode uses its own configured default)
+const reviewModel: string | null = reviewAgent === 'opencode'
+  ? optional('OPENCODE_MODEL', null)
+  : optional('REVIEW_MODEL', 'opus');
+
+// Fail loud on agent/model format mismatch. opencode exits 0 even on error, so a
+// stale value (e.g. "opus" left in OPENCODE_MODEL, or "openai/.." in REVIEW_MODEL
+// while still on claude) would otherwise silently produce empty reviews.
+const modelMismatch = modelAgentMismatch(reviewAgent, reviewModel);
+if (modelMismatch) {
+  throw new Error(`[config] ${modelMismatch}`);
+}
 
 const config = {
   // GitHub — token is optional when `gh auth login` is already done
@@ -91,11 +124,14 @@ const config = {
   prCloneDepth: optionalInt('PR_CLONE_DEPTH', 200),
   prCloneTimeoutMs: optionalInt('PR_CLONE_TIMEOUT_MS', 90000),
 
-  // Claude CLI timeout for the review subagent (minutes → ms)
+  // Review agent CLI timeout for the review subagent (minutes → ms)
   reviewTimeoutMs: optionalInt('REVIEW_TIMEOUT_MIN', 20) * 60 * 1000,
 
-  // Claude model for the review subagent (review quality lever)
-  reviewModel: optional('REVIEW_MODEL', 'opus') as string,
+  // Which CLI coding agent is spawned for the review (claude | opencode)
+  reviewAgent,
+
+  // Model for the review agent (null → agent's own default). See note above.
+  reviewModel,
 
   // Max PRs reviewed in parallel (caps memory from concurrent Opus subagents)
   reviewConcurrency: optionalInt('REVIEW_CONCURRENCY', 3),
@@ -118,7 +154,8 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  PR_CLONE_ENABLED    : ${config.prCloneEnabled}`);
   console.log(`  PR_CLONE_DEPTH      : ${config.prCloneDepth}`);
   console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
-  console.log(`  REVIEW_MODEL        : ${config.reviewModel}`);
+  console.log(`  REVIEW_AGENT        : ${config.reviewAgent}`);
+  console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent default)'} (from ${config.reviewAgent === 'opencode' ? 'OPENCODE_MODEL' : 'REVIEW_MODEL'})`);
   console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
   console.log(`  STATE_RETENTION_DAYS: ${config.stateRetentionDays}`);
 }
