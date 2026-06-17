@@ -47,7 +47,7 @@ function optionalBool(name: string, defaultValue: boolean): boolean {
 const VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
 
 // ── Review agent (computed early so the model default can depend on it) ─────────
-const VALID_REVIEW_AGENTS = ['claude', 'opencode'] as const;
+const VALID_REVIEW_AGENTS = ['claude', 'opencode', 'codex'] as const;
 
 const reviewAgent: ReviewAgent = (() => {
   const value = (optional('REVIEW_AGENT', 'claude') as string).toLowerCase();
@@ -59,15 +59,21 @@ const reviewAgent: ReviewAgent = (() => {
   return value as ReviewAgent;
 })();
 
-// Model passed to the review agent (review quality lever). The two agents use
+// Model passed to the review agent (review quality lever). The agents use
 // different model formats, so each reads its own env var — switching REVIEW_AGENT
 // alone is then safe, with no cross-format breakage:
 //   - claude   reads REVIEW_MODEL   (short alias, e.g. "opus"; default "opus")
 //   - opencode reads OPENCODE_MODEL ("provider/model", e.g. "google/gemini-2.5-flash";
 //              unset → null → opencode uses its own configured default)
-const reviewModel: string | null = reviewAgent === 'opencode'
-  ? optional('OPENCODE_MODEL', null)
-  : optional('REVIEW_MODEL', 'opus');
+//   - codex    reads CODEX_MODEL    (bare name, e.g. "gpt-5.5", "gpt-5.2-codex";
+//              unset → null → codex uses its own configured default)
+const reviewModel: string | null = (() => {
+  switch (reviewAgent) {
+    case 'opencode': return optional('OPENCODE_MODEL', null);
+    case 'codex':    return optional('CODEX_MODEL', null);
+    default:         return optional('REVIEW_MODEL', 'opus'); // claude
+  }
+})();
 
 // Fail loud on agent/model format mismatch. opencode exits 0 even on error, so a
 // stale value (e.g. "opus" left in OPENCODE_MODEL, or "openai/.." in REVIEW_MODEL
@@ -155,7 +161,7 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  PR_CLONE_DEPTH      : ${config.prCloneDepth}`);
   console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
   console.log(`  REVIEW_AGENT        : ${config.reviewAgent}`);
-  console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent default)'} (from ${config.reviewAgent === 'opencode' ? 'OPENCODE_MODEL' : 'REVIEW_MODEL'})`);
+  console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent default)'} (from ${config.reviewAgent === 'opencode' ? 'OPENCODE_MODEL' : config.reviewAgent === 'codex' ? 'CODEX_MODEL' : 'REVIEW_MODEL'})`);
   console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
   console.log(`  STATE_RETENTION_DAYS: ${config.stateRetentionDays}`);
 }

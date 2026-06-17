@@ -2,14 +2,19 @@
  * agent-command — build the spawn command/args for the configured review agent.
  *
  * Pure (no config / no side effects) so it can be unit-tested in isolation.
- * Two agents are supported:
+ * Three agents are supported:
  *   - claude   : `claude -p [--model <alias>] --dangerously-skip-permissions`
  *                prompt delivered via stdin.
  *   - opencode : `opencode run [--model <provider/model>] --dangerously-skip-permissions <prompt>`
  *                prompt delivered as a positional argument.
+ *   - codex    : `codex exec [--model <name>] --dangerously-bypass-approvals-and-sandbox
+ *                 --skip-git-repo-check <prompt>`
+ *                prompt delivered as a positional argument. Uses the OpenAI Codex
+ *                CLI, which works with ChatGPT-account OAuth (where opencode's
+ *                openai path is blocked).
  */
 
-export type ReviewAgent = 'claude' | 'opencode';
+export type ReviewAgent = 'claude' | 'opencode' | 'codex';
 
 export interface AgentInvocation {
   command: string;
@@ -31,6 +36,20 @@ export function buildAgentInvocation(
         'run',
         ...(model ? ['--model', model] : []),
         '--dangerously-skip-permissions',
+        prompt,
+      ],
+      promptViaStdin: false,
+    };
+  }
+
+  if (agent === 'codex') {
+    return {
+      command: 'codex',
+      args: [
+        'exec',
+        ...(model ? ['--model', model] : []),
+        '--dangerously-bypass-approvals-and-sandbox',
+        '--skip-git-repo-check',
         prompt,
       ],
       promptViaStdin: false,
@@ -69,6 +88,10 @@ export function modelAgentMismatch(agent: ReviewAgent, model: string | null): st
   if (agent === 'claude' && looksLikeProviderModel) {
     return `REVIEW_AGENT=claude expects a short model alias (e.g. "opus"), ` +
       `but REVIEW_MODEL looks like a provider/model: "${model}"`;
+  }
+  if (agent === 'codex' && looksLikeProviderModel) {
+    return `REVIEW_AGENT=codex expects a bare model name ` +
+      `(e.g. "gpt-5.5", "gpt-5.2-codex"), but CODEX_MODEL looks like a provider/model: "${model}"`;
   }
   return null;
 }

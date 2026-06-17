@@ -10,6 +10,7 @@
 import { getPRDetails, getPRHeadSha, verifyReviewPosted } from '../github';
 import { buildAnalysisPrompt } from '../review-prompt';
 import { sessions_spawn } from '../utils/sessions_spawn';
+import { extractVerdict } from './verdict';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
 import ReviewedPRsState, { getSharedState } from '../utils/state-manager';
 import logger from '../utils/logger';
@@ -17,16 +18,6 @@ import config from '../utils/config';
 import { ReviewResult, ReviewVerdict, PRStatus } from '../types';
 
 const inFlightReviews = new Set<string>();
-
-function extractVerdict(output: string): ReviewVerdict {
-  const match = output.match(/VERDICT:\s*(APPROVED|NEEDS_WORK|BLOCKED)/i);
-  if (!match) return 'reviewed';
-  const token = match[1].toUpperCase();
-  if (token === 'APPROVED')   return 'approved';
-  if (token === 'NEEDS_WORK') return 'needs_work';
-  if (token === 'BLOCKED')    return 'blocked';
-  return 'reviewed';
-}
 
 async function executeReview(
   owner: string,

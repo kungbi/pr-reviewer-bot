@@ -46,6 +46,36 @@ describe('buildAgentInvocation', () => {
       expect(inv.args).not.toContain('--model');
     });
   });
+
+  describe('codex', () => {
+    it('uses `codex exec`, passes the model, bypasses sandbox, and delivers the prompt as a positional arg', () => {
+      const inv = buildAgentInvocation(PROMPT, 'codex', 'gpt-5.2-codex');
+
+      expect(inv.command).toBe('codex');
+      expect(inv.args).toEqual([
+        'exec',
+        '--model',
+        'gpt-5.2-codex',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '--skip-git-repo-check',
+        PROMPT,
+      ]);
+      expect(inv.promptViaStdin).toBe(false);
+      expect(inv.args[inv.args.length - 1]).toBe(PROMPT);
+    });
+
+    it('omits the --model flag when model is null (uses codex default)', () => {
+      const inv = buildAgentInvocation(PROMPT, 'codex', null);
+
+      expect(inv.args).toEqual([
+        'exec',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '--skip-git-repo-check',
+        PROMPT,
+      ]);
+      expect(inv.args).not.toContain('--model');
+    });
+  });
 });
 
 describe('modelAgentMismatch', () => {
@@ -64,6 +94,11 @@ describe('modelAgentMismatch', () => {
     expect(modelAgentMismatch('opencode', 'openai/gpt-5.2-codex')).toBeNull();
   });
 
+  it('accepts a bare model name for codex', () => {
+    expect(modelAgentMismatch('codex', 'gpt-5.5')).toBeNull();
+    expect(modelAgentMismatch('codex', 'gpt-5.2-codex')).toBeNull();
+  });
+
   it('rejects a claude alias passed to opencode', () => {
     const msg = modelAgentMismatch('opencode', 'opus');
     expect(msg).not.toBeNull();
@@ -74,5 +109,11 @@ describe('modelAgentMismatch', () => {
     const msg = modelAgentMismatch('claude', 'openai/gpt-5.2-codex');
     expect(msg).not.toBeNull();
     expect(msg).toContain('alias');
+  });
+
+  it('rejects a provider/model passed to codex', () => {
+    const msg = modelAgentMismatch('codex', 'openai/gpt-5.2-codex');
+    expect(msg).not.toBeNull();
+    expect(msg).toContain('bare model name');
   });
 });
