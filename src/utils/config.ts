@@ -100,13 +100,13 @@ const config = {
   discordChannelId: optional('DISCORD_CHANNEL_ID', null),
 
   // Bot display name
-  botName: optional('BOT_NAME', 'kungbi-spider') as string,
+  botName: optional('BOT_NAME', 'pr-reviewer-bot') as string,
 
   // Bot avatar URL for Discord notifications
-  botAvatarUrl: optional('BOT_AVATAR_URL', 'https://github.com/kungbi-spider.png') as string,
+  botAvatarUrl: optional('BOT_AVATAR_URL', 'https://github.com/github.png') as string,
 
   // GitHub username to poll review requests for
-  githubReviewer: optional('GH_REVIEWER', 'backend-woongbi') as string,
+  githubReviewer: optional('GH_REVIEWER', 'reviewer-github-username') as string,
 
   // HTTP server port
   port: optionalInt('PORT', 3000),

@@ -1,230 +1,169 @@
-# USAGE.md — Kungbi PR Reviewer Bot
+# PR Reviewer Bot Usage
 
-Quick-start guide for operating the bot in production or development.
+운영/개발 환경에서 PR Reviewer Bot을 실행하고 점검하는 간단한 가이드입니다.
 
----
-
-## Starting the Bot
-
-### Standard Start
-
-```bash
-cd /home/node/.openclaw/workspace/kungbi-pr-reviewer-bot
-./START.sh
-```
-
-The bot will:
-- Load environment variables from `.env`
-- Start an Express server on `PORT=3000`
-- Begin polling GitHub API at the configured `POLL_INTERVAL`
-- Log to `logs/bot.log`
-
-### Verify Running
-
-```bash
-curl http://localhost:3000/health
-# → {"status":"ok","uptime":12345}
-```
-
-### Stopping the Bot
-
-```bash
-./KILL.sh
-```
+현재 봇은 **GitHub polling mode**로 동작합니다. GitHub webhook 서버나 별도 agent gateway는 사용하지 않습니다.
 
 ---
 
-## How to Start Polling
+## 시작하기
 
-Polling starts automatically when the bot launches (via `src/poller.js`).
+```bash
+cd /Users/woongbishin/pr-reviewer-bot
+npm install
+cp .env.example .env
+# .env 값 채우기
+npm test
+npm run build
+```
 
-To change the polling interval, edit `.env`:
+운영 실행은 PM2를 사용합니다.
+
+```bash
+set -a
+. ./.env
+set +a
+npx pm2 start ecosystem.config.js
+```
+
+재시작:
+
+```bash
+set -a
+. ./.env
+set +a
+npx pm2 restart pr-reviewer-bot --update-env
+```
+
+상태/로그 확인:
+
+```bash
+npx pm2 status
+npx pm2 logs pr-reviewer-bot --lines 200
+```
+
+---
+
+## 동작 방식
+
+1. `GH_REVIEWER`에게 리뷰 요청된 open PR을 GitHub Search API로 조회합니다.
+2. `state/reviewed-prs.json`에서 이미 처리한 PR/HEAD SHA인지 확인합니다.
+3. 새 PR 또는 새 commit이면 리뷰를 시작합니다.
+4. `PR_CLONE_ENABLED=true`이면 PR branch를 임시 디렉터리에 clone합니다.
+5. `REVIEW_AGENT`에 지정된 CLI agent를 실행합니다: `codex`, `claude`, `opencode`.
+6. agent가 GitHub review/inline comment를 게시합니다.
+7. 봇이 review 게시 여부를 확인하고 Discord에 시작/완료/실패 알림을 보냅니다.
+
+---
+
+## 환경 변수
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---:|---|---|
+| `DISCORD_WEBHOOK_URL` | ✅ | — | Discord 알림용 incoming webhook URL |
+| `GH_TOKEN` | 권장 | — | GitHub API, clone, review 게시용 token |
+| `GH_REVIEWER` | ✅ | `reviewer-github-username` | 감시할 GitHub reviewer username |
+| `BOT_NAME` | 선택 | `pr-reviewer-bot` | Discord 표시 이름 |
+| `BOT_AVATAR_URL` | 선택 | GitHub 기본 이미지 | Discord avatar URL |
+| `POLL_INTERVAL_MIN` | 선택 | `5` | polling 간격, 분 단위 |
+| `LOG_LEVEL` | 선택 | `INFO` | `DEBUG`, `INFO`, `WARN`, `ERROR` |
+| `PR_CLONE_ENABLED` | 선택 | `true` | PR branch clone 기반 리뷰 사용 여부 |
+| `PR_CLONE_DEPTH` | 선택 | `200` | shallow clone depth |
+| `PR_CLONE_TIMEOUT_MS` | 선택 | `90000` | clone timeout |
+| `REVIEW_AGENT` | ✅ | `codex` | 사용할 agent: `codex`, `claude`, `opencode` |
+| `CODEX_MODEL` | 선택 | agent 기본값 | Codex model 이름 |
+| `REVIEW_MODEL` | 선택 | `opus` | Claude model alias |
+| `OPENCODE_MODEL` | 선택 | agent 기본값 | OpenCode provider/model |
+| `REVIEW_TIMEOUT_MIN` | 선택 | `50` | PR 하나당 agent timeout |
+| `REVIEW_CONCURRENCY` | 선택 | `3` | 동시 리뷰 개수 |
+| `STATE_RETENTION_DAYS` | 선택 | `30` | 완료 상태 보관 기간 |
+
+`WEBHOOK_SECRET`는 현재 polling mode에서 사용하지 않습니다.
+
+---
+
+## agent 변경
+
+Codex 사용:
 
 ```ini
-POLL_INTERVAL=5   # seconds between polls (default: 5)
+REVIEW_AGENT=codex
+CODEX_MODEL=gpt-5.5
 ```
 
-Restart after editing:
+변경 후 PM2 환경을 갱신해야 합니다.
 
 ```bash
-./KILL.sh && ./START.sh
+set -a; . ./.env; set +a
+npx pm2 restart pr-reviewer-bot --update-env
+```
+
+PM2에 반영됐는지 확인:
+
+```bash
+npx pm2 jlist > /tmp/pr-reviewer-pm2.json
+python3 - <<'PY'
+import json
+apps=json.load(open('/tmp/pr-reviewer-pm2.json'))
+app=next(a for a in apps if a.get('name')=='pr-reviewer-bot')
+print(app['pm2_env']['status'])
+print(app['pm2_env'].get('env',{}).get('REVIEW_AGENT'))
+print(app['pm2_env'].get('env',{}).get('CODEX_MODEL'))
+PY
 ```
 
 ---
 
-## How to Trigger Reviews
+## 특정 PR 재리뷰
 
-이 봇은 **폴링 전용**입니다. 웹훅 서버가 없습니다.
+봇은 `state/reviewed-prs.json`에 PR별 상태와 HEAD SHA를 저장합니다.
 
-### Option 1 — Polling (자동, 항상 켜짐)
-
-봇이 실행 중이면 `POLL_INTERVAL_MINUTES`마다 자동으로 GitHub를 폴링합니다.
-
-`src/polling/poller.js` → `src/review/polling-reviewer.js` 순서로:
-1. `gh pr list --assignee @me` 로 오픈 PR 조회
-2. `state/reviewed-prs.json` 으로 중복 방지 (SHA 기반)
-3. 새 PR 감지 시 sessions_spawn → AI 리뷰 실행
-4. Discord 알림 전송
-
-### Option 2 — Manual Review Trigger
-
-특정 PR을 즉시 수동으로 리뷰하려면:
+같은 PR을 다시 리뷰하게 하려면 해당 PR entry를 삭제하고 재시작합니다.
 
 ```bash
-cd ~/pr-reviewer-bot
-node -e "
-const { executeReview } = require('./src/review/review-executor');
-executeReview('org이름', 'repo이름', PR번호)
-  .then(r => console.log(r))
-  .catch(e => console.error(e));
-"
-```
-
-예시:
-```bash
-node -e "
-const { executeReview } = require('./src/review/review-executor');
-executeReview('kungbi-spiders', 'my-repo', 42)
-  .then(r => console.log(r));
-"
-```
-
-봇이 실행 중이 아니어도 동작합니다.
-
----
-
-## How to Monitor via Discord
-
-### What Gets Sent to Discord
-
-| Event | Message |
-|-------|---------|
-| PR review requested | Full PR details with diff link, reviewer assignment |
-| Review completed | Quality score (0-100), feedback summary, suggestions |
-| Review failed | Error message + PR info |
-| Daily summary | Stats: reviews today, avg quality, top learnings |
-
-### Discord Message Format
-
-```
-🕷️ PR Review — kungbi-spider
-
-Repository: kungbi-spiders/kungbi-pr-reviewer
-PR: #42 | feat: new feature
-Quality: 78/100
-Feedback: Good structure. Add edge case tests.
-Suggestions:
-  - Consider adding input validation
-  - Ensure test coverage for the fix
-
-Reviewer: kungbi-spider | Reviewed: 2026-04-14T14:42:00Z
-```
-
-### Daily Summary (Cron)
-
-The `daily-summary.sh` script generates a daily report:
-
-```bash
-./daily-summary.sh
-```
-
-Add to crontab for automatic daily delivery:
-
-```cron
-0 9 * * * cd /home/node/.openclaw/workspace/kungbi-pr-reviewer-bot && ./daily-summary.sh
+npx pm2 restart pr-reviewer-bot --update-env
 ```
 
 ---
 
-## How to View Learnings
+## 트러블슈팅
 
-### Via Progress File
-
-```bash
-cat data/progress.txt
-```
-
-Output format:
-```
-=== Iteration 1 (2026-04-14T14:37:43.813Z) ===
-First test learning: Check for null safety in PR diff parsing.
-
-=== Iteration 2 (2026-04-14T14:37:43.818Z) ===
-PR: test/repo#123
-Quality: 8/10
-Feedback: Good coverage
-Suggestions: Add more edge case tests
-```
-
-### Via Iteration Counter
+### Discord에 리뷰 실패가 반복됨
 
 ```bash
-cat data/iteration_counter.json
-# → {"count": 30}
+npx pm2 logs pr-reviewer-bot --lines 200
+npx pm2 status
+codex --version
 ```
 
-### Via Test Output
+확인할 것:
 
-```bash
-cat test/output/learnings-output.txt
-```
+- `.env`의 `REVIEW_AGENT` 값
+- PM2가 `--update-env`로 재시작됐는지
+- 선택한 agent CLI가 설치/인증되어 있는지
+- `GH_TOKEN` 권한이 충분한지
+
+### 새 PR을 못 찾음
+
+- `GH_REVIEWER`가 실제 리뷰 요청 대상 username인지 확인
+- PR이 open 상태인지 확인
+- GitHub token이 private repo에 접근 가능한지 확인
+- GitHub API rate limit 확인
+
+### 리뷰는 완료됐는데 인라인 코멘트가 없음
+
+- GitHub inline comment는 diff에 포함된 라인에만 달 수 있습니다.
+- agent가 top-level review만 남겼을 수 있습니다.
+- PM2 로그에서 GitHub API 422 응답 여부를 확인합니다.
 
 ---
 
-## Troubleshooting
+## 기본 검증
 
-### Bot not sending Discord notifications
+변경 후 최소 검증:
 
-1. Check `DISCORD_WEBHOOK_URL` in `.env` is valid
-2. Test webhook directly: paste the URL in Discord channel settings → Test webhook
-3. Check logs: `tail -f logs/bot.log`
-
-### Bot not picking up new PRs
-
-1. Verify `GH_TOKEN` is set and has `repo` scope
-2. Check `state/reviewed-prs.json` — PRs marked as reviewed are skipped
-3. Increase `LOG_LEVEL=DEBUG` in `.env` and restart
-
-### Webhook rejected (HMAC error)
-
-1. Ensure `WEBHOOK_SECRET` in `.env` matches the GitHub webhook secret
-2. For local testing with ngrok: `ngrok http 3000`
-3. Update GitHub webhook Payload URL to the ngrok URL
-
-### Review subagent not spawning
-
-1. Check `tools/sessions_spawn.js` exists
-2. Check OpenClaw gateway is running: `openclaw gateway status`
-3. Verify `GH_TOKEN` has permissions for the repo
-
-### Retries happening
-
-- **Normal behavior** — up to 3 retries per PR if review fails
-- After 3 failures, PR is permanently skipped (logged in `state/reviewed-prs.json`)
-- To reset: delete `state/reviewed-prs.json` and restart
-
----
-
-## Environment Variables Reference
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `GH_TOKEN` | Yes | — | GitHub PAT or `gh auth` token |
-| `WEBHOOK_SECRET` | Yes | — | GitHub webhook HMAC secret |
-| `DISCORD_WEBHOOK_URL` | Yes | — | Discord incoming webhook URL |
-| `BOT_NAME` | No | `kungbi-spider` | Display name in Discord |
-| `PORT` | No | `3000` | HTTP server port |
-| `LOG_LEVEL` | No | `INFO` | DEBUG, INFO, WARN, ERROR |
-| `POLL_INTERVAL` | No | `5` | Seconds between GitHub API polls |
-
----
-
-## File Locations
-
-| File | Purpose |
-|------|---------|
-| `logs/bot.log` | Runtime logs |
-| `state/reviewed-prs.json` | PR review state + retry counts |
-| `data/progress.txt` | Learnings log |
-| `data/iteration_counter.json` | Total iterations completed |
-| `test/output/test-results.json` | Last test run results |
+```bash
+set -a; . ./.env; set +a
+npm test
+npm run build
+```
