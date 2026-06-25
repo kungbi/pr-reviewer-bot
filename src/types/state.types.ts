@@ -27,6 +27,7 @@ export interface PRStateEntry {
 export interface StateFile {
   reviewedPRs: Record<string, PRStateEntry>;
   repliedComments: Record<string, { commentedAt: string }>;
+  replyMonitorStartedAt?: string;
 }
 
 export interface CommentReplyEntry {

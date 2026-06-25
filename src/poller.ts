@@ -2,7 +2,8 @@ import cron from 'node-cron';
 import axios from 'axios';
 import { executeReviewWithRetry } from './review/polling-reviewer';
 import { executeReview } from './review/review-executor';
-import { getPRHeadSha } from './github';
+import { getPRHeadSha, getAuthenticatedLogin, listReviewComments, postReviewCommentReply } from './github';
+import { judgeAndDraftReply, processReviewCommentReplies } from './monitoring/comment-reply-monitor';
 import { getSharedState } from './utils/state-manager';
 import config from './utils/config';
 import logger from './utils/logger';
@@ -128,6 +129,51 @@ async function pollAssignedPRs(): Promise<void> {
   }
 }
 
+async function pollReviewCommentReplies(): Promise<void> {
+  if (!config.replyMonitorEnabled) {
+    logger.debug('[comment-reply-monitor] Disabled by REPLY_MONITOR_ENABLED=false');
+    return;
+  }
+
+  const state = getSharedState();
+  const prs = state.getPRsForReplyMonitoring(config.replyMonitorLookbackDays);
+  if (prs.length === 0) return;
+
+  const minReplyCreatedAt = state.getReplyMonitorStartedAt();
+  const botLogin = await getAuthenticatedLogin();
+  if (!botLogin) {
+    logger.warn('[comment-reply-monitor] Could not resolve bot login; skipping reply monitor');
+    return;
+  }
+
+  logger.info(`[comment-reply-monitor] Checking review-comment replies on ${prs.length} reviewed PR(s)`);
+  for (const pr of prs) {
+    try {
+      const comments = await listReviewComments(pr.owner, pr.repo, pr.prNumber);
+      const result = await processReviewCommentReplies({
+        owner: pr.owner,
+        repo: pr.repo,
+        prNumber: pr.prNumber,
+        botLogin,
+        comments,
+        minReplyCreatedAt,
+        isCommentReplied: (commentId) => state.isCommentReplied(commentId),
+        markCommentReplied: (commentId) => state.markCommentReplied(commentId),
+        judgeAndDraftReply,
+        postReviewCommentReply,
+      });
+      if (result.candidates > 0 || result.replied > 0) {
+        logger.info(
+          `[comment-reply-monitor] ${pr.owner}/${pr.repo}#${pr.prNumber}: ` +
+          `scanned=${result.scanned}, candidates=${result.candidates}, replied=${result.replied}, skipped=${result.skipped}`
+        );
+      }
+    } catch (err) {
+      logger.warn(`[comment-reply-monitor] Failed on ${pr.owner}/${pr.repo}#${pr.prNumber}: ${(err as Error).message}`);
+    }
+  }
+}
+
 async function triggerReview(pr: GitHubPRItem): Promise<RetryOutcome> {
   const repoInfo = getRepoInfo(pr);
   const prInfo: PRInfo = {
@@ -162,8 +208,12 @@ function startPolling(intervalMinutes = 5): void {
   }
 
   logger.info(`[POLLER] Starting cron job: every ${intervalMinutes} minutes`);
-  cron.schedule(`*/${intervalMinutes} * * * *`, () => { pollAssignedPRs(); });
-  pollAssignedPRs();
+  const tick = async (): Promise<void> => {
+    await pollAssignedPRs();
+    await pollReviewCommentReplies();
+  };
+  cron.schedule(`*/${intervalMinutes} * * * *`, () => { void tick(); });
+  void tick();
 }
 
 export {

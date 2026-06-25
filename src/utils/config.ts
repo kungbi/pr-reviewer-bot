@@ -106,7 +106,7 @@ const config = {
   botAvatarUrl: optional('BOT_AVATAR_URL', 'https://github.com/github.png') as string,
 
   // GitHub username to poll review requests for
-  githubReviewer: optional('GH_REVIEWER', 'reviewer-github-username') as string,
+  githubReviewer: optional('GH_REVIEWER', optional('GH_USERNAME', 'reviewer-github-username')) as string,
 
   // HTTP server port
   port: optionalInt('PORT', 3000),
@@ -142,6 +142,10 @@ const config = {
   // Max PRs reviewed in parallel (caps memory from concurrent Opus subagents)
   reviewConcurrency: optionalInt('REVIEW_CONCURRENCY', 3),
 
+  // Monitor replies to this bot's PR review comments and answer when needed
+  replyMonitorEnabled: optionalBool('REPLY_MONITOR_ENABLED', true),
+  replyMonitorLookbackDays: optionalInt('REPLY_MONITOR_LOOKBACK_DAYS', 14),
+
   // Days to keep completed PR entries in the state file before pruning
   stateRetentionDays: optionalInt('STATE_RETENTION_DAYS', 30),
 };
@@ -163,6 +167,8 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  REVIEW_AGENT        : ${config.reviewAgent}`);
   console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent default)'} (from ${config.reviewAgent === 'opencode' ? 'OPENCODE_MODEL' : config.reviewAgent === 'codex' ? 'CODEX_MODEL' : 'REVIEW_MODEL'})`);
   console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
+  console.log(`  REPLY_MONITOR       : ${config.replyMonitorEnabled}`);
+  console.log(`  REPLY_LOOKBACK_DAYS : ${config.replyMonitorLookbackDays}`);
   console.log(`  STATE_RETENTION_DAYS: ${config.stateRetentionDays}`);
 }
 

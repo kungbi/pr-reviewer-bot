@@ -97,6 +97,28 @@ describe('ReviewedPRsState', () => {
     it('returns false for unknown comment', () => {
       expect(state.isCommentReplied('unknown')).toBe(false);
     });
+
+    it('returns only monitorable PRs within the reply lookback window', () => {
+      state.markPRReviewed('owner', 'repo', 1, 'reviewed');
+      state.markPRReviewed('owner', 'repo', 2, 'skipped');
+      state.markPRReviewed('owner', 'repo', 3, 'needs_work');
+
+      const oldDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      state.data.reviewedPRs['owner/repo#3'].reviewedAt = oldDate;
+      state.save();
+
+      const prs = state.getPRsForReplyMonitoring(14);
+      expect(prs.map((pr) => pr.prNumber)).toEqual([1]);
+    });
+
+    it('initializes and persists reply monitor watermark', () => {
+      const startedAt = state.getReplyMonitorStartedAt();
+      expect(startedAt).toBeTruthy();
+
+      const state2 = new ReviewedPRsState(stateFile);
+      state2.load();
+      expect(state2.getReplyMonitorStartedAt()).toBe(startedAt);
+    });
   });
 
   describe('persistence', () => {

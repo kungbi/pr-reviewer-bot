@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import logger from './logger';
-import config from './config';
 import { PRStatus, PRStateEntry, StateFile } from '../types';
 
 const MAX_RETRIES = 3;
@@ -11,7 +10,9 @@ export const STATE_FILE = path.join(__dirname, '../../../state/reviewed-prs.json
 
 // A 'reviewing' lock older than this is treated as stale — the bot likely
 // crashed mid-review, so the PR should be re-picked instead of stuck forever.
-const STALE_REVIEWING_MS = config.reviewTimeoutMs + 5 * 60 * 1000;
+const REVIEW_TIMEOUT_MIN = Number.parseInt(process.env.REVIEW_TIMEOUT_MIN ?? '20', 10);
+const REVIEW_TIMEOUT_MS = (Number.isFinite(REVIEW_TIMEOUT_MIN) ? REVIEW_TIMEOUT_MIN : 20) * 60 * 1000;
+const STALE_REVIEWING_MS = REVIEW_TIMEOUT_MS + 5 * 60 * 1000;
 
 class ReviewedPRsState {
   stateFilePath: string;
@@ -173,6 +174,29 @@ class ReviewedPRsState {
       }
     }
     return pending;
+  }
+
+  getPRsForReplyMonitoring(lookbackDays: number | null = null): PRStateEntry[] {
+    const monitorable: PRStatus[] = ['reviewed', 'completed', 'blocked', 'needs_work', 'approved'];
+    const minReviewedAtMs = lookbackDays && lookbackDays > 0
+      ? Date.now() - lookbackDays * 24 * 60 * 60 * 1000
+      : null;
+
+    return Object.values(this.data.reviewedPRs).filter((pr) => {
+      if (!monitorable.includes(pr.status)) return false;
+      if (minReviewedAtMs === null) return true;
+      const reviewedAtMs = pr.reviewedAt ? new Date(pr.reviewedAt).getTime() : NaN;
+      return Number.isFinite(reviewedAtMs) && reviewedAtMs >= minReviewedAtMs;
+    });
+  }
+
+  getReplyMonitorStartedAt(): string {
+    if (!this.data.replyMonitorStartedAt) {
+      this.data.replyMonitorStartedAt = new Date().toISOString();
+      this.save();
+      logger.info(`[StateManager] Initialized reply monitor watermark at ${this.data.replyMonitorStartedAt}`);
+    }
+    return this.data.replyMonitorStartedAt;
   }
 
   /**

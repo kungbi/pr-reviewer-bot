@@ -22,6 +22,20 @@ export interface InlineComment {
   body: string;
 }
 
+export interface ReviewComment {
+  id: number;
+  body: string;
+  user: { login: string } | null;
+  path?: string | null;
+  line?: number | null;
+  original_line?: number | null;
+  diff_hunk?: string | null;
+  html_url?: string;
+  in_reply_to_id?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 
 export interface ReviewRequester {

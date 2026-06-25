@@ -7,7 +7,7 @@ import axios from 'axios';
 import logger from './utils/logger';
 import config from './utils/config';
 import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from './utils/errors';
-import { PRDetails, InlineComment, ReviewEvent } from './types';
+import { PRDetails, InlineComment, ReviewComment, ReviewEvent } from './types';
 
 const GH_API = 'https://api.github.com';
 
@@ -118,6 +118,43 @@ const postComment = createRetryFunction(async (owner: unknown, repo: unknown, pr
 }, 3, 1000) as (owner: string, repo: string, prNumber: number, body: string) => Promise<unknown>;
 
 /**
+ * List all review comments on a PR, including threaded replies.
+ */
+const listReviewComments = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown): Promise<ReviewComment[]> => {
+  logger.info(`Listing review comments: ${owner}/${repo}#${prNumber}`);
+  const all: ReviewComment[] = [];
+  let page = 1;
+
+  while (true) {
+    const res = await axios.get(
+      `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/comments`,
+      { headers: getHeaders(), params: { per_page: 100, page } }
+    );
+    checkRateLimit(res.headers as Record<string, string>);
+    const pageItems = Array.isArray(res.data) ? res.data as ReviewComment[] : [];
+    all.push(...pageItems);
+    if (pageItems.length < 100) break;
+    page += 1;
+  }
+
+  return all;
+}, 3, 1000) as (owner: string, repo: string, prNumber: number) => Promise<ReviewComment[]>;
+
+/**
+ * Reply inside an existing PR review comment thread.
+ */
+const postReviewCommentReply = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, commentId: unknown, body: unknown): Promise<unknown> => {
+  logger.info(`Posting review comment reply to ${owner}/${repo}#${prNumber} comment ${commentId}`);
+  const res = await axios.post(
+    `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
+    { body },
+    { headers: getHeaders() }
+  );
+  checkRateLimit(res.headers as Record<string, string>);
+  return res.data;
+}, 3, 1000) as (owner: string, repo: string, prNumber: number, commentId: number, body: string) => Promise<unknown>;
+
+/**
  * Post a review to a PR (APPROVE / REQUEST_CHANGES / COMMENT)
  */
 const postReview = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, body: unknown, event: unknown): Promise<unknown> => {
@@ -211,9 +248,12 @@ async function postInlineReview(
 
 export {
   checkAuth,
+  getAuthenticatedLogin,
   getPRDetails,
   getPRDiff,
   postComment,
+  listReviewComments,
+  postReviewCommentReply,
   postReview,
   getPRHeadSha,
   postInlineReview,
