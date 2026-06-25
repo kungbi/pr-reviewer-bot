@@ -56,6 +56,13 @@ describe('ReviewedPRsState', () => {
       expect(state.isPRReviewing('owner', 'repo', 1)).toBe(true);
     });
 
+    it('preserves retry metadata when marking a pending retry PR as reviewing again', () => {
+      state.markPRRetryFailure('owner', 'repo', 1, 'first failure');
+      state.markPRReviewing('owner', 'repo', 1);
+      expect(state.getPRRetryCount('owner', 'repo', 1)).toBe(1);
+      expect(state.data.reviewedPRs['owner/repo#1'].failures).toHaveLength(1);
+    });
+
     it('returns false for non-reviewing PR', () => {
       expect(state.isPRReviewing('owner', 'repo', 999)).toBe(false);
     });

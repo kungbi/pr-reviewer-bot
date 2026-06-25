@@ -151,7 +151,7 @@ async function executeReview(
     // executeReviewWithRetry for retry handling.
     if (subagentFailed || reviewMissing) {
       const reason = subagentFailed
-        ? 'Claude 서브에이전트 실행 실패'
+        ? `${config.reviewAgent} 서브에이전트 실행 실패`
         : '리뷰가 GitHub에 게시되지 않음';
 
       try {

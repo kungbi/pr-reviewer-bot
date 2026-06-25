@@ -1,4 +1,22 @@
-import { buildAgentInvocation, modelAgentMismatch } from '../src/utils/agent-command';
+import { buildAgentInvocation, buildAgentSpawnPath, modelAgentMismatch } from '../src/utils/agent-command';
+
+describe('buildAgentSpawnPath', () => {
+  it('prepends known local CLI bin directories so PM2 can find codex installed under nvm', () => {
+    const pathValue = buildAgentSpawnPath('/usr/bin:/bin:/Users/me/.nvm/versions/node/v24.15.0/bin', '/Users/me');
+
+    expect(pathValue?.split(':').slice(0, 4)).toEqual([
+      '/Users/me/.nvm/versions/node/v24.15.0/bin',
+      '/Users/me/.nvm/versions/node/v22.14.0/bin',
+      '/Users/me/.local/bin',
+      '/opt/homebrew/bin',
+    ]);
+    expect(pathValue?.split(':').filter((part) => part === '/Users/me/.nvm/versions/node/v24.15.0/bin')).toHaveLength(1);
+  });
+
+  it('returns the original PATH when HOME is unavailable', () => {
+    expect(buildAgentSpawnPath('/usr/bin:/bin', undefined)).toBe('/usr/bin:/bin');
+  });
+});
 
 describe('buildAgentInvocation', () => {
   const PROMPT = 'review this PR';

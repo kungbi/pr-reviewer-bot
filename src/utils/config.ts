@@ -4,8 +4,11 @@
  * Throws on startup if required values are missing.
  */
 
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 
-// Note: .env is loaded by START.sh via shell export.
+// Note: .env is loaded here with override=true so PM2's stale --update-env
+// snapshot cannot keep an old REVIEW_AGENT/CODEX_MODEL after .env changes.
 // For programmatic usage, call `loadEnvFile()` below if needed.
 
 import { modelAgentMismatch, type ReviewAgent } from './agent-command';

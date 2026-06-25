@@ -7,7 +7,7 @@
  */
 import { spawn } from 'child_process';
 import config from './config';
-import { buildAgentInvocation } from './agent-command';
+import { buildAgentInvocation, buildAgentSpawnPath } from './agent-command';
 
 interface SpawnOptions {
   cwd?: string;
@@ -31,6 +31,10 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
     const spawnOpts: Parameters<typeof spawn>[2] = {
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: timeoutMs,
+      env: {
+        ...process.env,
+        PATH: buildAgentSpawnPath(process.env.PATH, process.env.HOME),
+      },
     };
     if (options?.cwd) {
       spawnOpts.cwd = options.cwd;

@@ -24,6 +24,24 @@ export interface AgentInvocation {
   promptViaStdin: boolean;
 }
 
+export function buildAgentSpawnPath(basePath: string | undefined, home: string | undefined): string | undefined {
+  if (!home) return basePath;
+
+  const extraBins = [
+    `${home}/.nvm/versions/node/v24.15.0/bin`,
+    `${home}/.nvm/versions/node/v22.14.0/bin`,
+    `${home}/.local/bin`,
+    '/opt/homebrew/bin',
+  ];
+  const parts = (basePath ?? '').split(':').filter(Boolean);
+  for (const bin of extraBins.reverse()) {
+    const index = parts.indexOf(bin);
+    if (index >= 0) parts.splice(index, 1);
+    parts.unshift(bin);
+  }
+  return parts.join(':');
+}
+
 export function buildAgentInvocation(
   prompt: string,
   agent: ReviewAgent,

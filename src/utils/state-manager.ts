@@ -131,7 +131,9 @@ class ReviewedPRsState {
    */
   markPRReviewing(owner: string, repo: string, prNumber: number): void {
     const key = this._getPRKey(owner, repo, prNumber);
+    const existing = this.data.reviewedPRs[key];
     this.data.reviewedPRs[key] = {
+      ...existing,
       owner,
       repo,
       prNumber,
