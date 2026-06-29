@@ -30,6 +30,12 @@ Discord 알림 전송
   - 리뷰 시작
   - 리뷰 완료
   - 리뷰 실패 / 영구 스킵
+  ↓
+review-comment reply monitor
+  ↓
+사람이 봇 review comment thread에 답글을 달면 감지
+  ↓
+agent가 답변 필요 여부를 판단하고, 필요 시 같은 GitHub review thread에 답글 게시
 ```
 
 ---
@@ -43,6 +49,7 @@ Discord 알림 전송
   - 현재 운영값: `codex`
   - 지원값: `codex`, `claude`, `opencode`
 - State file: `state/reviewed-prs.json`
+- Reply monitor: `REPLY_MONITOR_ENABLED=true`일 때 봇 review comment에 달린 사람 답글을 감지해 필요한 경우 추가 답변
 - Discord notification: `DISCORD_WEBHOOK_URL`
 
 ---
@@ -61,6 +68,8 @@ pr-reviewer-bot/
 │   │   ├── review-executor.ts      # PR 리뷰 orchestration
 │   │   ├── repo-cloner.ts          # PR branch temp clone
 │   │   └── verdict.ts              # agent output verdict 파싱
+│   ├── monitoring/
+│   │   └── comment-reply-monitor.ts # review comment thread 답글 감지/자동 답변
 │   └── utils/
 │       ├── agent-command.ts        # codex/claude/opencode command 생성
 │       ├── config.ts               # 환경변수 로딩/검증
@@ -97,6 +106,8 @@ cp .env.example .env
 | `CODEX_MODEL` | 선택 | `REVIEW_AGENT=codex`일 때 사용할 Codex model. 비우면 Codex CLI 기본값 |
 | `REVIEW_TIMEOUT_MIN` | 선택 | PR 하나당 agent 실행 timeout, 분 단위 |
 | `REVIEW_CONCURRENCY` | 선택 | 동시에 리뷰할 PR 개수 |
+| `REPLY_MONITOR_ENABLED` | 선택 | 봇이 남긴 review comment thread에 사람이 답글을 달면 감지/응답할지 여부 |
+| `REPLY_MONITOR_LOOKBACK_DAYS` | 선택 | reply monitor가 스캔할 최근 reviewed PR 범위. 기본 14일 |
 
 현재 운영에서는 다음처럼 둡니다.
 
@@ -248,6 +259,29 @@ state/reviewed-prs.json
 ```
 
 특정 PR을 다시 리뷰하게 만들려면 상태 파일에서 해당 PR entry를 제거한 뒤 PM2를 재시작합니다.
+
+## Review comment 답글 자동 응답
+
+`REPLY_MONITOR_ENABLED=true`이면 봇은 polling tick마다 최근 reviewed PR의 review comments를 조회합니다.
+
+```text
+GET /repos/{owner}/{repo}/pulls/{pull_number}/comments
+```
+
+GitHub review comment reply는 `in_reply_to_id`를 갖습니다. 봇은 다음 조건을 만족하는 댓글만 처리합니다.
+
+- 사람이 단 reply임
+- reply의 parent comment 작성자가 봇임
+- `replyMonitorStartedAt` 이후에 작성됨
+- `state/reviewed-prs.json.repliedComments`에 아직 처리 기록이 없음
+
+처리 대상이면 agent가 답변 필요 여부를 판단합니다. 단순 감사/확인성 답글은 무시하고, 질문/반박/설명 요청이면 같은 review thread에 답변합니다.
+
+```text
+POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{parent_comment_id}/replies
+```
+
+중복 방지와 과거 댓글 폭탄 방지는 `state/reviewed-prs.json`에 저장됩니다.
 
 ### Runtime data / privacy
 
