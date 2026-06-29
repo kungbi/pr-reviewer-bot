@@ -8,6 +8,7 @@ import {
   sendDiscordNotification,
   sendReviewCompletedNotification,
   sendPRAssignedNotification,
+  sendReviewCommentReplyNotification,
 } from '../src/discord-notifier';
 
 beforeEach(() => {
@@ -98,5 +99,38 @@ describe('sendPRAssignedNotification', () => {
     });
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.embeds[0].title).toContain('#7');
+  });
+});
+
+describe('sendReviewCommentReplyNotification', () => {
+  it('sends human reply content to Discord', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await sendReviewCommentReplyNotification({
+      owner: 'org', repo: 'repo', prNumber: 8, prTitle: 'PR #8',
+      commenter: 'dev1', commentId: 101, parentCommentId: 100,
+      commentBody: '이거 이미 ValidationPipe에서 막히지 않나요?',
+      commentUrl: 'https://github.com/org/repo/pull/8#discussion_r101',
+      replyAction: 'human_replied',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.embeds[0].title).toContain('리뷰 댓글 답글 감지');
+    expect(body.embeds[0].fields.find((f: { name: string }) => f.name === 'Human Reply').value).toContain('ValidationPipe');
+  });
+
+  it('sends bot reply content to Discord', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await sendReviewCommentReplyNotification({
+      owner: 'org', repo: 'repo', prNumber: 9, prTitle: 'PR #9',
+      commenter: 'dev1', commentId: 201, parentCommentId: 200,
+      commentBody: '설명 부탁드립니다.',
+      botReplyBody: '확인 결과 현재 경로에서는 DTO 검증으로 차단됩니다.',
+      replyUrl: 'https://github.com/org/repo/pull/9#discussion_r202',
+      replyAction: 'bot_replied',
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.embeds[0].title).toContain('봇 답글 게시');
+    expect(body.embeds[0].fields.find((f: { name: string }) => f.name === 'Bot Reply').value).toContain('DTO 검증');
   });
 });

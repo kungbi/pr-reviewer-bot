@@ -41,6 +41,22 @@ interface ProcessReviewCommentRepliesArgs {
     commentId: number,
     body: string,
   ) => Promise<unknown>;
+  notifyReviewCommentReply?: (event: {
+    action: 'human_replied' | 'bot_replied';
+    owner: string;
+    repo: string;
+    prNumber: number;
+    parentComment: ReviewComment;
+    humanReply: ReviewComment;
+    botReplyBody?: string;
+    botReplyUrl?: string;
+  }) => Promise<unknown>;
+}
+
+function getHtmlUrl(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const htmlUrl = (value as { html_url?: unknown }).html_url;
+  return typeof htmlUrl === 'string' ? htmlUrl : undefined;
 }
 
 function extractJsonObject(text: string): unknown | null {
@@ -151,6 +167,15 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
 
     result.candidates += 1;
 
+    await args.notifyReviewCommentReply?.({
+      action: 'human_replied',
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      parentComment: parent,
+      humanReply,
+    });
+
     const decision = await args.judgeAndDraftReply({
       owner: args.owner,
       repo: args.repo,
@@ -160,7 +185,18 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
     });
 
     if (decision.verdict === 'REPLY_NEEDED' && decision.body?.trim()) {
-      await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, decision.body.trim());
+      const botReplyBody = decision.body.trim();
+      const postedReply = await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, botReplyBody);
+      await args.notifyReviewCommentReply?.({
+        action: 'bot_replied',
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        parentComment: parent,
+        humanReply,
+        botReplyBody,
+        botReplyUrl: getHtmlUrl(postedReply),
+      });
       args.markCommentReplied(humanReply.id);
       result.replied += 1;
       logger.info(`[comment-reply-monitor] Replied to ${args.owner}/${args.repo}#${args.prNumber} comment ${humanReply.id}`);

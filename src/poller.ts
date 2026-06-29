@@ -4,6 +4,7 @@ import { executeReviewWithRetry } from './review/polling-reviewer';
 import { executeReview } from './review/review-executor';
 import { getPRHeadSha, getAuthenticatedLogin, listReviewComments, postReviewCommentReply } from './github';
 import { judgeAndDraftReply, processReviewCommentReplies } from './monitoring/comment-reply-monitor';
+import { sendDiscordNotification } from './discord-notifier';
 import { getSharedState } from './utils/state-manager';
 import config from './utils/config';
 import logger from './utils/logger';
@@ -161,6 +162,20 @@ async function pollReviewCommentReplies(): Promise<void> {
         markCommentReplied: (commentId) => state.markCommentReplied(commentId),
         judgeAndDraftReply,
         postReviewCommentReply,
+        notifyReviewCommentReply: (event) => sendDiscordNotification('review_comment_reply', {
+          owner: event.owner,
+          repo: event.repo,
+          prNumber: event.prNumber,
+          prTitle: `${event.owner}/${event.repo}#${event.prNumber}`,
+          commenter: event.humanReply.user?.login,
+          commentId: event.humanReply.id,
+          parentCommentId: event.parentComment.id,
+          commentBody: event.humanReply.body,
+          botReplyBody: event.botReplyBody,
+          commentUrl: event.humanReply.html_url,
+          replyUrl: event.botReplyUrl,
+          replyAction: event.action,
+        }),
       });
       if (result.candidates > 0 || result.replied > 0) {
         logger.info(

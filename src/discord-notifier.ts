@@ -10,6 +10,12 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
+function truncateDiscordField(value: string | undefined | null, max = 1000): string {
+  const text = (value ?? '').trim();
+  if (!text) return '(empty)';
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
 /**
  * Send a POST request to Discord webhook
  */
@@ -90,6 +96,8 @@ async function sendDiscordNotification(event: string, data: NotificationData): P
       return sendReviewCompletedNotification(data);
     case 'comment_needed':
       return sendCommentNeededNotification(data);
+    case 'review_comment_reply':
+      return sendReviewCommentReplyNotification(data);
     default:
       console.warn(`[DISCORD] Unknown event type: ${event}`);
       return false;
@@ -201,6 +209,60 @@ async function sendCommentNeededNotification({ repoOwner, repoName, prNumber, pr
 }
 
 /**
+ * Notify when a human replies to the bot's review comment, or when the bot posts
+ * an additional answer in that same review thread.
+ */
+async function sendReviewCommentReplyNotification(data: NotificationData): Promise<boolean> {
+  const {
+    owner,
+    repo,
+    repoOwner,
+    repoName,
+    prNumber,
+    prTitle,
+    commenter,
+    commentId,
+    parentCommentId,
+    commentBody,
+    botReplyBody,
+    commentUrl,
+    replyUrl,
+    replyAction,
+  } = data;
+  const repoLabel = owner && repo ? `${owner}/${repo}` : `${repoOwner}/${repoName}`;
+  const prUrl = `https://github.com/${repoLabel}/pull/${prNumber}`;
+  const isBotReply = replyAction === 'bot_replied';
+  const fields: DiscordField[] = [
+    { name: 'Repository', value: repoLabel, inline: true },
+    { name: 'PR', value: `#${prNumber}`, inline: true },
+  ];
+
+  if (commenter) fields.push({ name: 'Commenter', value: `@${commenter}`, inline: true });
+  if (commentId) fields.push({ name: 'Human Reply ID', value: String(commentId), inline: true });
+  if (parentCommentId) fields.push({ name: 'Parent Bot Comment ID', value: String(parentCommentId), inline: true });
+  if (commentBody) fields.push({ name: 'Human Reply', value: truncateDiscordField(commentBody), inline: false });
+  if (botReplyBody) fields.push({ name: 'Bot Reply', value: truncateDiscordField(botReplyBody), inline: false });
+  if (commentUrl) fields.push({ name: 'Human Reply URL', value: commentUrl, inline: false });
+  if (replyUrl) fields.push({ name: 'Bot Reply URL', value: replyUrl, inline: false });
+
+  const embed = buildEmbed({
+    title: isBotReply ? `🤖 봇 답글 게시 - #${prNumber}` : `💬 리뷰 댓글 답글 감지 - #${prNumber}`,
+    description: isBotReply
+      ? `**${prTitle || repoLabel}**\n봇이 review comment thread에 추가 답변을 게시했습니다.`
+      : `**${prTitle || repoLabel}**\n@${commenter || 'unknown'} 님이 봇 review comment에 답글을 달았습니다.`,
+    color: isBotReply ? 0x2563EB : 0xF59E0B,
+    url: replyUrl || commentUrl || prUrl,
+    fields,
+  });
+
+  return sendWebhook({
+    username: config.botName,
+    avatar_url: config.botAvatarUrl,
+    embeds: [embed],
+  });
+}
+
+/**
  * Notify when a review has failed or been permanently skipped
  */
 async function sendReviewFailedNotification({ owner, repo, prNumber, prTitle, prAuthor = null, prHeadBranch = null, prBaseBranch = null, errorMessage, permanentlySkipped = false }: NotificationData & { errorMessage?: string; permanentlySkipped?: boolean }): Promise<boolean> {
@@ -268,6 +330,7 @@ export {
   sendPRAssignedNotification,
   sendReviewCompletedNotification,
   sendCommentNeededNotification,
+  sendReviewCommentReplyNotification,
   sendReviewStartedNotification,
   sendReviewFailedNotification,
 };

@@ -31,7 +31,8 @@ describe('processReviewCommentReplies', () => {
     const isCommentReplied = jest.fn().mockReturnValue(false);
     const markCommentReplied = jest.fn();
     const judgeAndDraftReply = jest.fn().mockResolvedValue({ verdict: 'REPLY_NEEDED', body: 'Yes, this is covered by DTO validation.' });
-    const postReviewCommentReply = jest.fn().mockResolvedValue({ id: 999 });
+    const postReviewCommentReply = jest.fn().mockResolvedValue({ id: 999, html_url: 'https://example.com/bot-reply' });
+    const notifyReviewCommentReply = jest.fn().mockResolvedValue(true);
 
     const result = await processReviewCommentReplies({
       ...baseArgs,
@@ -40,6 +41,7 @@ describe('processReviewCommentReplies', () => {
       markCommentReplied,
       judgeAndDraftReply,
       postReviewCommentReply,
+      notifyReviewCommentReply,
     });
 
     expect(judgeAndDraftReply).toHaveBeenCalledWith(expect.objectContaining({
@@ -47,6 +49,17 @@ describe('processReviewCommentReplies', () => {
       humanReply,
     }));
     expect(postReviewCommentReply).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 601, 100, 'Yes, this is covered by DTO validation.');
+    expect(notifyReviewCommentReply).toHaveBeenCalledTimes(2);
+    expect(notifyReviewCommentReply).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      action: 'human_replied',
+      parentComment: parent,
+      humanReply,
+    }));
+    expect(notifyReviewCommentReply).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      action: 'bot_replied',
+      botReplyBody: 'Yes, this is covered by DTO validation.',
+      botReplyUrl: 'https://example.com/bot-reply',
+    }));
     expect(markCommentReplied).toHaveBeenCalledWith(101);
     expect(result).toEqual({ scanned: 2, candidates: 1, replied: 1, skipped: 0 });
   });
@@ -56,6 +69,7 @@ describe('processReviewCommentReplies', () => {
     const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'jhoon03' }, body: 'Thanks!' });
     const markCommentReplied = jest.fn();
     const postReviewCommentReply = jest.fn();
+    const notifyReviewCommentReply = jest.fn().mockResolvedValue(true);
 
     const result = await processReviewCommentReplies({
       ...baseArgs,
@@ -64,9 +78,15 @@ describe('processReviewCommentReplies', () => {
       markCommentReplied,
       judgeAndDraftReply: jest.fn().mockResolvedValue({ verdict: 'NO_REPLY' }),
       postReviewCommentReply,
+      notifyReviewCommentReply,
     });
 
     expect(postReviewCommentReply).not.toHaveBeenCalled();
+    expect(notifyReviewCommentReply).toHaveBeenCalledTimes(1);
+    expect(notifyReviewCommentReply).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'human_replied',
+      humanReply,
+    }));
     expect(markCommentReplied).toHaveBeenCalledWith(101);
     expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
   });

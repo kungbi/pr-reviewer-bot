@@ -29,5 +29,11 @@ export interface NotificationData {
   action?: string;
   commenter?: string;
   commentId?: string | number;
+  parentCommentId?: string | number;
+  commentBody?: string;
+  botReplyBody?: string;
+  commentUrl?: string;
+  replyUrl?: string;
+  replyAction?: 'human_replied' | 'bot_replied';
   errorMessage?: string;
 }
