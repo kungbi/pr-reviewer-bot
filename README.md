@@ -313,44 +313,7 @@ dist/
 
 ## 트러블슈팅
 
-### Discord에 “리뷰 실패”가 반복해서 뜸
-
-1. PM2 환경 확인
-
-```bash
-npx pm2 jlist | jq '.[] | select(.name=="pr-reviewer-bot") | .pm2_env.env.REVIEW_AGENT'
-```
-
-2. agent CLI 확인
-
-```bash
-codex --version
-```
-
-3. 로그 확인
-
-```bash
-npx pm2 logs pr-reviewer-bot --lines 200
-```
-
-4. `.env` 변경 후 재시작했는지 확인
-
-```bash
-set -a; . ./.env; set +a
-npx pm2 restart pr-reviewer-bot --update-env
-```
-
-### 새 PR을 못 찾음
-
-- `GH_REVIEWER` 값 확인
-- `GH_TOKEN` 권한 확인: private repo 접근 및 PR review 게시 권한 필요
-- GitHub Search API rate limit 확인
-
-### 인라인 코멘트가 안 달림
-
-- GitHub는 diff에 포함된 line에만 inline comment를 허용합니다.
-- agent가 review를 게시했는지 봇이 `verifyReviewPosted`로 확인합니다.
-- review는 올라갔지만 inline comment가 거절되는 경우, GitHub API 422 로그를 확인합니다.
+운영 중 자주 보는 문제와 확인 절차는 [docs/troubleshooting.md](docs/troubleshooting.md)를 참고하세요.
 
 ---
 
