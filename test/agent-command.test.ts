@@ -66,14 +66,16 @@ describe('buildAgentInvocation', () => {
   });
 
   describe('codex', () => {
-    it('uses `codex exec`, passes the model, bypasses sandbox, and delivers the prompt as a positional arg', () => {
-      const inv = buildAgentInvocation(PROMPT, 'codex', 'gpt-5.2-codex');
+    it('uses `codex exec`, passes the model and reasoning effort, bypasses sandbox, and delivers the prompt as a positional arg', () => {
+      const inv = buildAgentInvocation(PROMPT, 'codex', 'gpt-5.2-codex', 'xhigh');
 
       expect(inv.command).toBe('codex');
       expect(inv.args).toEqual([
         'exec',
         '--model',
         'gpt-5.2-codex',
+        '-c',
+        'model_reasoning_effort="xhigh"',
         '--dangerously-bypass-approvals-and-sandbox',
         '--skip-git-repo-check',
         PROMPT,
@@ -92,6 +94,7 @@ describe('buildAgentInvocation', () => {
         PROMPT,
       ]);
       expect(inv.args).not.toContain('--model');
+      expect(inv.args).not.toContain('model_reasoning_effort="xhigh"');
     });
   });
 });

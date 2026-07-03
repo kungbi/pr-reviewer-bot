@@ -72,6 +72,7 @@ npx pm2 logs pr-reviewer-bot --lines 200
 | `PR_CLONE_TIMEOUT_MS` | 선택 | `90000` | clone timeout |
 | `REVIEW_AGENT` | ✅ | `codex` | 사용할 agent: `codex`, `claude`, `opencode` |
 | `CODEX_MODEL` | 선택 | agent 기본값 | Codex model 이름 |
+| `CODEX_REASONING_EFFORT` | 선택 | agent 기본값 | Codex reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `REVIEW_MODEL` | 선택 | `opus` | Claude model alias |
 | `OPENCODE_MODEL` | 선택 | agent 기본값 | OpenCode provider/model |
 | `REVIEW_TIMEOUT_MIN` | 선택 | `50` | PR 하나당 agent timeout |
@@ -89,6 +90,7 @@ Codex 사용:
 ```ini
 REVIEW_AGENT=codex
 CODEX_MODEL=gpt-5.5
+CODEX_REASONING_EFFORT=xhigh
 ```
 
 변경 후 PM2 환경을 갱신해야 합니다.

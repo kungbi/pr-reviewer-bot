@@ -5,6 +5,8 @@ import { executeReview } from './review/review-executor';
 import { getPRHeadSha, getAuthenticatedLogin, listReviewComments, postReviewCommentReply } from './github';
 import { judgeAndDraftReply, processReviewCommentReplies } from './monitoring/comment-reply-monitor';
 import { sendDiscordNotification } from './discord-notifier';
+import { archiveAndMaybeLearnFromThread } from './review-memory/review-memory-service';
+import { getSharedReviewMemoryStore } from './review-memory/review-memory-store';
 import { getSharedState } from './utils/state-manager';
 import config from './utils/config';
 import logger from './utils/logger';
@@ -176,6 +178,7 @@ async function pollReviewCommentReplies(): Promise<void> {
           replyUrl: event.botReplyUrl,
           replyAction: event.action,
         }),
+        classifyAndPersistReviewLesson: (event) => archiveAndMaybeLearnFromThread(event),
       });
       if (result.candidates > 0 || result.replied > 0) {
         logger.info(
@@ -220,6 +223,12 @@ function startPolling(intervalMinutes = 5): void {
     getSharedState().pruneOldEntries(config.stateRetentionDays * 24 * 60 * 60 * 1000);
   } catch (err) {
     logger.warn(`[POLLER] State prune failed: ${(err as Error).message}`);
+  }
+
+  try {
+    getSharedReviewMemoryStore().pruneOldEntries(config.reviewMemoryRetentionDays * 24 * 60 * 60 * 1000);
+  } catch (err) {
+    logger.warn(`[POLLER] Review memory prune failed: ${(err as Error).message}`);
   }
 
   logger.info(`[POLLER] Starting cron job: every ${intervalMinutes} minutes`);

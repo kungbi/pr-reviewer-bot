@@ -37,6 +37,14 @@ function optionalInt(name: string, defaultValue: number): number {
   return parsed;
 }
 
+function optionalIntAtLeast(name: string, defaultValue: number, minValue: number): number {
+  const parsed = optionalInt(name, defaultValue);
+  if (parsed < minValue) {
+    throw new Error(`[config] ${name} must be >= ${minValue}, got: ${parsed}`);
+  }
+  return parsed;
+}
+
 function optionalBool(name: string, defaultValue: boolean): boolean {
   const value = process.env[name];
   if (value === undefined || value === null || value.trim() === '') {
@@ -51,6 +59,7 @@ const VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
 
 // ── Review agent (computed early so the model default can depend on it) ─────────
 const VALID_REVIEW_AGENTS = ['claude', 'opencode', 'codex'] as const;
+const VALID_CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 const reviewAgent: ReviewAgent = (() => {
   const value = (optional('REVIEW_AGENT', 'claude') as string).toLowerCase();
@@ -76,6 +85,18 @@ const reviewModel: string | null = (() => {
     case 'codex':    return optional('CODEX_MODEL', null);
     default:         return optional('REVIEW_MODEL', 'opus'); // claude
   }
+})();
+
+const codexReasoningEffort: string | null = (() => {
+  const value = optional('CODEX_REASONING_EFFORT', null);
+  if (value === null) return null;
+  const normalized = value.toLowerCase();
+  if (!(VALID_CODEX_REASONING_EFFORTS as readonly string[]).includes(normalized)) {
+    throw new Error(
+      `[config] CODEX_REASONING_EFFORT must be one of ${VALID_CODEX_REASONING_EFFORTS.join('|')}, got: "${value}"`
+    );
+  }
+  return normalized;
 })();
 
 // Fail loud on agent/model format mismatch. opencode exits 0 even on error, so a
@@ -141,13 +162,20 @@ const config = {
 
   // Model for the review agent (null → agent's own default). See note above.
   reviewModel,
+  codexReasoningEffort,
 
   // Max PRs reviewed in parallel (caps memory from concurrent Opus subagents)
   reviewConcurrency: optionalInt('REVIEW_CONCURRENCY', 3),
 
   // Monitor replies to this bot's PR review comments and answer when needed
   replyMonitorEnabled: optionalBool('REPLY_MONITOR_ENABLED', true),
-  replyMonitorLookbackDays: optionalInt('REPLY_MONITOR_LOOKBACK_DAYS', 14),
+  replyMonitorLookbackDays: optionalIntAtLeast('REPLY_MONITOR_LOOKBACK_DAYS', 14, 0),
+
+  // Review memory / team conventions
+  reviewMemoryEnabled: optionalBool('REVIEW_MEMORY_ENABLED', true),
+  reviewMemoryMaxLessons: optionalIntAtLeast('REVIEW_MEMORY_MAX_LESSONS', 8, 0),
+  reviewMemoryRawMaxChars: optionalIntAtLeast('REVIEW_MEMORY_RAW_MAX_CHARS', 4000, 100),
+  reviewMemoryRetentionDays: optionalIntAtLeast('REVIEW_MEMORY_RETENTION_DAYS', 180, 1),
 
   // Days to keep completed PR entries in the state file before pruning
   stateRetentionDays: optionalInt('STATE_RETENTION_DAYS', 30),
@@ -169,9 +197,13 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
   console.log(`  REVIEW_AGENT        : ${config.reviewAgent}`);
   console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent default)'} (from ${config.reviewAgent === 'opencode' ? 'OPENCODE_MODEL' : config.reviewAgent === 'codex' ? 'CODEX_MODEL' : 'REVIEW_MODEL'})`);
+  console.log(`  REVIEW_REASONING    : ${config.reviewAgent === 'codex' ? (config.codexReasoningEffort ?? '(codex default)') : '(n/a)'}`);
   console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
   console.log(`  REPLY_MONITOR       : ${config.replyMonitorEnabled}`);
   console.log(`  REPLY_LOOKBACK_DAYS : ${config.replyMonitorLookbackDays}`);
+  console.log(`  REVIEW_MEMORY       : ${config.reviewMemoryEnabled}`);
+  console.log(`  REVIEW_MEMORY_LIMIT : ${config.reviewMemoryMaxLessons}`);
+  console.log(`  REVIEW_MEMORY_RET_D : ${config.reviewMemoryRetentionDays}`);
   console.log(`  STATE_RETENTION_DAYS: ${config.stateRetentionDays}`);
 }
 

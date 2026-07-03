@@ -46,6 +46,7 @@ export function buildAgentInvocation(
   prompt: string,
   agent: ReviewAgent,
   model: string | null,
+  codexReasoningEffort: string | null = null,
 ): AgentInvocation {
   if (agent === 'opencode') {
     return {
@@ -66,6 +67,7 @@ export function buildAgentInvocation(
       args: [
         'exec',
         ...(model ? ['--model', model] : []),
+        ...(codexReasoningEffort ? ['-c', `model_reasoning_effort="${codexReasoningEffort}"`] : []),
         '--dangerously-bypass-approvals-and-sandbox',
         '--skip-git-repo-check',
         prompt,

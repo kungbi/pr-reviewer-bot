@@ -7,6 +7,7 @@ state/
 data/
 dist/
 .omc/
+.hermes/
 .bot.pid
 logs/
 coverage/

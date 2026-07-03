@@ -91,6 +91,92 @@ describe('processReviewCommentReplies', () => {
     expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
   });
 
+  it('archives and classifies human replies for review memory', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin }, body: 'This service mixes validation and persistence.' });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'jhoon03' }, body: '맞아요. 이 repo에서는 controller DTO validation과 service orchestration을 분리합니다.' });
+    const archiveReviewThread = jest.fn();
+    const classifyAndPersistReviewLesson = jest.fn().mockResolvedValue(undefined);
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({ verdict: 'NO_REPLY' }),
+      postReviewCommentReply: jest.fn(),
+      archiveReviewThread,
+      classifyAndPersistReviewLesson,
+    });
+
+    expect(archiveReviewThread).toHaveBeenCalledWith(expect.objectContaining({
+      owner: 'fan-maum',
+      repo: 'fanmaum-api',
+      prNumber: 601,
+      parentComment: parent,
+      humanReply,
+    }));
+    expect(classifyAndPersistReviewLesson).toHaveBeenCalledWith(expect.objectContaining({
+      parentComment: parent,
+      humanReply,
+    }));
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('archives bot reply bodies after posting a follow-up answer', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin }, body: 'Please handle invalid pagination.' });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'jhoon03' }, body: 'Is this already covered by ValidationPipe?' });
+    const archiveReviewThread = jest.fn();
+    const classifyAndPersistReviewLesson = jest.fn().mockResolvedValue(undefined);
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({ verdict: 'REPLY_NEEDED', body: 'Yes, DTO validation covers it.' }),
+      postReviewCommentReply: jest.fn().mockResolvedValue({ id: 999, html_url: 'https://example.com/bot-reply' }),
+      archiveReviewThread,
+      classifyAndPersistReviewLesson,
+    });
+
+    expect(archiveReviewThread).toHaveBeenCalledWith(expect.objectContaining({
+      botReplyBody: 'Yes, DTO validation covers it.',
+      botReplyUrl: 'https://example.com/bot-reply',
+    }));
+    expect(classifyAndPersistReviewLesson).toHaveBeenCalledWith(expect.objectContaining({
+      botReplyBody: 'Yes, DTO validation covers it.',
+      botReplyUrl: 'https://example.com/bot-reply',
+    }));
+  });
+
+  it('marks a reply as processed before slow review-memory classification resolves', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin }, body: 'This service mixes validation and persistence.' });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'jhoon03' }, body: '맞아요. repo convention입니다.' });
+    const markCommentReplied = jest.fn();
+    let resolveClassification!: () => void;
+    const classifyAndPersistReviewLesson = jest.fn(() => new Promise<void>((resolve) => {
+      resolveClassification = resolve;
+    }));
+
+    const promise = processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied,
+      judgeAndDraftReply: jest.fn().mockResolvedValue({ verdict: 'NO_REPLY' }),
+      postReviewCommentReply: jest.fn(),
+      classifyAndPersistReviewLesson,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(classifyAndPersistReviewLesson).toHaveBeenCalled();
+    expect(markCommentReplied).toHaveBeenCalledWith(101);
+
+    resolveClassification();
+    await expect(promise).resolves.toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
   it('skips replies older than the reply monitor watermark', async () => {
     const parent = comment({ id: 100, user: { login: botLogin }, created_at: '2026-06-25T00:00:00Z' });
     const oldReply = comment({

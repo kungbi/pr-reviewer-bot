@@ -22,6 +22,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
     prompt,
     config.reviewAgent,
     config.reviewModel,
+    config.codexReasoningEffort,
   );
   console.log(`[sessions_spawn] Spawning ${command} for analysis...`);
 

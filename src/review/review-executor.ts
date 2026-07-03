@@ -12,6 +12,7 @@ import { buildAnalysisPrompt } from '../review-prompt';
 import { sessions_spawn } from '../utils/sessions_spawn';
 import { extractVerdict } from './verdict';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
+import { getReviewMemoryContext } from '../review-memory/review-memory-service';
 import ReviewedPRsState, { getSharedState } from '../utils/state-manager';
 import logger from '../utils/logger';
 import config from '../utils/config';
@@ -106,7 +107,17 @@ async function executeReview(
     let reviewOutput: string;
     let subagentFailed = false;
     try {
-      const prompt = buildAnalysisPrompt({ owner, repo, prNumber, clonePath, isReReview, previousSha });
+      let reviewMemory;
+      try {
+        reviewMemory = getReviewMemoryContext({ owner, repo, limit: config.reviewMemoryMaxLessons });
+        if (reviewMemory.lessons.length > 0) {
+          logger.info(`[review-memory] Injecting ${reviewMemory.lessons.length} lesson(s) for ${owner}/${repo}#${prNumber}`);
+        }
+      } catch (err) {
+        logger.warn(`[review-memory] Failed to load context for ${owner}/${repo}#${prNumber}: ${(err as Error).message}`);
+      }
+
+      const prompt = buildAnalysisPrompt({ owner, repo, prNumber, clonePath, isReReview, previousSha, reviewMemory });
       logger.info(`[review-executor] Spawning review session for ${owner}/${repo}#${prNumber}${clonePath ? ' (clone mode)' : ' (gh mode)'}`);
       reviewOutput = await sessions_spawn(prompt, clonePath ? { cwd: clonePath } : undefined);
       if (!reviewOutput || !reviewOutput.trim()) {

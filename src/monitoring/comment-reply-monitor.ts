@@ -51,6 +51,24 @@ interface ProcessReviewCommentRepliesArgs {
     botReplyBody?: string;
     botReplyUrl?: string;
   }) => Promise<unknown>;
+  archiveReviewThread?: (event: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    parentComment: ReviewComment;
+    humanReply: ReviewComment;
+    botReplyBody?: string;
+    botReplyUrl?: string;
+  }) => void;
+  classifyAndPersistReviewLesson?: (event: {
+    owner: string;
+    repo: string;
+    prNumber: number;
+    parentComment: ReviewComment;
+    humanReply: ReviewComment;
+    botReplyBody?: string;
+    botReplyUrl?: string;
+  }) => Promise<void>;
 }
 
 function getHtmlUrl(value: unknown): string | undefined {
@@ -101,6 +119,35 @@ function normalizeReplyDecision(value: unknown): ReplyDecision {
     return { verdict, body, reason };
   }
   return { verdict: 'NO_REPLY', reason: reason ?? 'No substantive reply required' };
+}
+
+async function persistReviewMemoryForReply(
+  args: ProcessReviewCommentRepliesArgs,
+  parentComment: ReviewComment,
+  humanReply: ReviewComment,
+  botReplyBody?: string,
+  botReplyUrl?: string,
+): Promise<void> {
+  if (!args.archiveReviewThread && !args.classifyAndPersistReviewLesson) return;
+  const event = {
+    owner: args.owner,
+    repo: args.repo,
+    prNumber: args.prNumber,
+    parentComment,
+    humanReply,
+    botReplyBody,
+    botReplyUrl,
+  };
+
+  try {
+    args.archiveReviewThread?.(event);
+    await args.classifyAndPersistReviewLesson?.(event);
+  } catch (err) {
+    logger.warn(
+      `[review-memory] Failed to persist discussion for ${args.owner}/${args.repo}#${args.prNumber} ` +
+      `comment ${humanReply.id}: ${(err as Error).message}`,
+    );
+  }
 }
 
 export async function judgeAndDraftReply(input: JudgeReplyInput): Promise<ReplyDecision> {
@@ -187,6 +234,7 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
     if (decision.verdict === 'REPLY_NEEDED' && decision.body?.trim()) {
       const botReplyBody = decision.body.trim();
       const postedReply = await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, botReplyBody);
+      const botReplyUrl = getHtmlUrl(postedReply);
       await args.notifyReviewCommentReply?.({
         action: 'bot_replied',
         owner: args.owner,
@@ -195,13 +243,15 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
         parentComment: parent,
         humanReply,
         botReplyBody,
-        botReplyUrl: getHtmlUrl(postedReply),
+        botReplyUrl,
       });
       args.markCommentReplied(humanReply.id);
+      await persistReviewMemoryForReply(args, parent, humanReply, botReplyBody, botReplyUrl);
       result.replied += 1;
       logger.info(`[comment-reply-monitor] Replied to ${args.owner}/${args.repo}#${args.prNumber} comment ${humanReply.id}`);
     } else {
       args.markCommentReplied(humanReply.id);
+      await persistReviewMemoryForReply(args, parent, humanReply);
       result.skipped += 1;
       logger.info(`[comment-reply-monitor] No reply needed for ${args.owner}/${args.repo}#${args.prNumber} comment ${humanReply.id}: ${decision.reason ?? 'no reason'}`);
     }

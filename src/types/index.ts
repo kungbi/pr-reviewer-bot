@@ -3,3 +3,4 @@ export * from './review.types';
 export * from './state.types';
 export * from './discord.types';
 export * from './clone.types';
+export * from './review-memory.types';
