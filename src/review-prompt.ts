@@ -3,6 +3,7 @@
  */
 
 import { ReviewMemoryContext } from './types';
+import { BOT_AUTHOR_DISCLOSURE } from './utils/comment-disclosure';
 
 interface ReviewPromptParams {
   owner: string;
@@ -91,6 +92,7 @@ export function buildAnalysisPrompt({ owner, repo, prNumber, clonePath, isReRevi
     : '';
 
   const reviewMemorySection = buildReviewMemorySection(reviewMemory);
+  const botAuthorDisclosureJson = BOT_AUTHOR_DISCLOSURE.replace(/\n/g, '\\n');
 
   return `${owner}/${repo} 레포의 PR #${prNumber}를 리뷰해줘. 한국어로 작성.
 
@@ -155,6 +157,15 @@ ${explorationSection}${conventionSection}${reReviewSection}${reviewMemorySection
 - 100% 확신이 서지 않는 코멘트는 **버려라**. 틀린 지적 하나가 리뷰 전체의 신뢰를 깎는다.
 - 검증을 통과한 코멘트만 게시한다.
 
+## GitHub 댓글 작성자 표시 — 필수
+
+GitHub에 게시하는 모든 body(전체 리뷰 body, 인라인 comments[].body, 기존 스레드 답글 body)는 반드시 아래 footer로 끝내라. 사람이 작성한 댓글로 오해되지 않게 이 표시를 생략하지 마라.
+
+${BOT_AUTHOR_DISCLOSURE}
+
+- 전체 리뷰 body뿐 아니라 각 인라인 코멘트에도 footer를 붙인다.
+- 기존 스레드에 답글을 달 때도 동일한 footer를 붙인다.
+
 ## 리뷰 게시 방법 — **직접 게시해라**
 
 리뷰 결과를 구조화된 문자열로 반환하지 마라. GitHub에 **직접 게시**한다.
@@ -166,9 +177,9 @@ gh api repos/${owner}/${repo}/pulls/${prNumber}/reviews --paginate
 gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --paginate
 \`\`\`
 - 누가 달았든 **이미 제기된 이슈를 같은 내용으로 다시 달지 마라.**
-- 네가 지적하려는 내용이 기존 코멘트 스레드와 관련 있으면, 새 코멘트 대신 그 스레드에 **답글**을 달아라:
+- 네가 지적하려는 내용이 기존 코멘트 스레드와 관련 있으면, 새 코멘트 대신 그 스레드에 **답글**을 달아라. 답글 body도 작성자 표시 footer로 끝내라:
   \`\`\`bash
-  gh api repos/${owner}/${repo}/pulls/${prNumber}/comments -f body="답글 내용" -F in_reply_to=<comment_id>
+  gh api repos/${owner}/${repo}/pulls/${prNumber}/comments -f body="답글 내용\n\n${botAuthorDisclosureJson}" -F in_reply_to=<comment_id>
   \`\`\`
 - 답글은 **정보를 더할 때만** 달아라 — 첨언, 심각도 정정, 새 커밋에서 해결됐는지 확인 등. 단순 동의("+1")는 달지 마라.
 - 기존 스레드에 답글로 처리한 이슈는 아래 2)의 새 인라인 리뷰에서는 제외한다.
@@ -186,19 +197,19 @@ cat > /tmp/review-${prNumber}.json <<'EOF'
 {
   "commit_id": "<HEAD_SHA>",
   "event": "REQUEST_CHANGES",
-  "body": "전체 리뷰 요약 (한두 문단, 한국어). 주요 이슈 카테고리와 총평.\\n\\n— Reviewed by PR Reviewer Bot",
+  "body": "전체 리뷰 요약 (한두 문단, 한국어). 주요 이슈 카테고리와 총평.\\n\\n${botAuthorDisclosureJson}",
   "comments": [
     {
       "path": "src/foo/bar.ts",
       "line": 42,
       "side": "RIGHT",
-      "body": "🔴 **Blocker** — [문제 설명]\\n\\n**왜 문제인가:** ...\\n\\n**수정 제안:**\\n\\\`\\\`\\\`ts\\n// 예시 코드\\n\\\`\\\`\\\`"
+      "body": "🔴 **Blocker** — [문제 설명]\\n\\n**왜 문제인가:** ...\\n\\n**수정 제안:**\\n\\\`\\\`\\\`ts\\n// 예시 코드\\n\\\`\\\`\\\`\\n\\n${botAuthorDisclosureJson}"
     },
     {
       "path": "src/foo/baz.ts",
       "line": 100,
       "side": "RIGHT",
-      "body": "🟡 **Important** — [설명]"
+      "body": "🟡 **Important** — [설명]\\n\\n${botAuthorDisclosureJson}"
     }
   ]
 }

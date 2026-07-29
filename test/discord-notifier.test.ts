@@ -55,6 +55,20 @@ describe('sendReviewCompletedNotification', () => {
     expect(body.embeds[0].color).toBe(0xEF4444);
   });
 
+  it('shows the severity breakdown in the completion summary instead of a generic issue count', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    await sendReviewCompletedNotification({
+      owner: 'org', repo: 'repo', prNumber: 30,
+      prTitle: 'Severity PR',
+      issuesFound: ['🔴 **Blocker 1건** · 🟡 **Important 2건** · 🟢 **Minor 1건**'],
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.embeds[0].description).toContain('🔴 **Blocker 1건** · 🟡 **Important 2건** · 🟢 **Minor 1건**');
+    expect(body.embeds[0].fields.find((f: { name: string }) => f.name === 'Issues Found').value)
+      .toContain('Blocker 1건');
+  });
+
   it('truncates issues list to 5', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
     const issues = Array.from({ length: 8 }, (_, i) => `Issue ${i + 1}`);

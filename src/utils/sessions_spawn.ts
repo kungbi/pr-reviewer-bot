@@ -1,8 +1,8 @@
 /**
- * sessions_spawn — CLI 코딩 에이전트(claude | opencode)를 스폰해 AI 분석 실행
+ * sessions_spawn — CLI 코딩 에이전트(claude | opencode | codex)를 스폰해 AI 분석 실행
  *
- * config.reviewAgent에 따라 claude 또는 opencode를 non-interactive로 실행하고,
- * 결과 텍스트(마지막 줄의 VERDICT 포함)를 반환한다. 프롬프트 전달 방식
+ * config.reviewAgent에 따라 설정된 에이전트를 non-interactive로 실행하고,
+ * 결과 텍스트를 반환한다. 프롬프트 전달 방식
  * (stdin vs positional arg)은 에이전트별로 buildAgentInvocation이 결정한다.
  */
 import { spawn } from 'child_process';

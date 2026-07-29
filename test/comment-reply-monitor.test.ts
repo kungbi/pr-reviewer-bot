@@ -1,5 +1,6 @@
 import { processReviewCommentReplies } from '../src/monitoring/comment-reply-monitor';
 import { ReviewComment } from '../src/types';
+import { appendBotAuthorDisclosure } from '../src/utils/comment-disclosure';
 
 describe('processReviewCommentReplies', () => {
   const botLogin = 'backend-woongbi';
@@ -33,6 +34,7 @@ describe('processReviewCommentReplies', () => {
     const judgeAndDraftReply = jest.fn().mockResolvedValue({ verdict: 'REPLY_NEEDED', body: 'Yes, this is covered by DTO validation.' });
     const postReviewCommentReply = jest.fn().mockResolvedValue({ id: 999, html_url: 'https://example.com/bot-reply' });
     const notifyReviewCommentReply = jest.fn().mockResolvedValue(true);
+    const expectedBotReplyBody = appendBotAuthorDisclosure('Yes, this is covered by DTO validation.');
 
     const result = await processReviewCommentReplies({
       ...baseArgs,
@@ -48,7 +50,7 @@ describe('processReviewCommentReplies', () => {
       originalBotComment: parent,
       humanReply,
     }));
-    expect(postReviewCommentReply).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 601, 100, 'Yes, this is covered by DTO validation.');
+    expect(postReviewCommentReply).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 601, 100, expectedBotReplyBody);
     expect(notifyReviewCommentReply).toHaveBeenCalledTimes(2);
     expect(notifyReviewCommentReply).toHaveBeenNthCalledWith(1, expect.objectContaining({
       action: 'human_replied',
@@ -57,7 +59,7 @@ describe('processReviewCommentReplies', () => {
     }));
     expect(notifyReviewCommentReply).toHaveBeenNthCalledWith(2, expect.objectContaining({
       action: 'bot_replied',
-      botReplyBody: 'Yes, this is covered by DTO validation.',
+      botReplyBody: expectedBotReplyBody,
       botReplyUrl: 'https://example.com/bot-reply',
     }));
     expect(markCommentReplied).toHaveBeenCalledWith(101);
@@ -127,6 +129,7 @@ describe('processReviewCommentReplies', () => {
     const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'jhoon03' }, body: 'Is this already covered by ValidationPipe?' });
     const archiveReviewThread = jest.fn();
     const classifyAndPersistReviewLesson = jest.fn().mockResolvedValue(undefined);
+    const expectedBotReplyBody = appendBotAuthorDisclosure('Yes, DTO validation covers it.');
 
     await processReviewCommentReplies({
       ...baseArgs,
@@ -140,11 +143,11 @@ describe('processReviewCommentReplies', () => {
     });
 
     expect(archiveReviewThread).toHaveBeenCalledWith(expect.objectContaining({
-      botReplyBody: 'Yes, DTO validation covers it.',
+      botReplyBody: expectedBotReplyBody,
       botReplyUrl: 'https://example.com/bot-reply',
     }));
     expect(classifyAndPersistReviewLesson).toHaveBeenCalledWith(expect.objectContaining({
-      botReplyBody: 'Yes, DTO validation covers it.',
+      botReplyBody: expectedBotReplyBody,
       botReplyUrl: 'https://example.com/bot-reply',
     }));
   });

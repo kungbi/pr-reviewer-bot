@@ -28,9 +28,11 @@ export function buildAgentSpawnPath(basePath: string | undefined, home: string |
   if (!home) return basePath;
 
   const extraBins = [
+    // Prefer the independently updated Codex CLI over nvm-global copies.
+    // PM2 otherwise reaches an older global install that may reject new models.
+    `${home}/.local/bin`,
     `${home}/.nvm/versions/node/v24.15.0/bin`,
     `${home}/.nvm/versions/node/v22.14.0/bin`,
-    `${home}/.local/bin`,
     '/opt/homebrew/bin',
   ];
   const parts = (basePath ?? '').split(':').filter(Boolean);

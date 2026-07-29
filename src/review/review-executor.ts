@@ -1,18 +1,25 @@
 /**
  * review-executor.ts
  *
- * Orchestrates PR reviews. Clones the PR (optional), spawns the Claude CLI
- * subagent with a prompt that instructs it to post inline comments directly
- * via `gh api`, then extracts a single-line verdict for state tracking.
+ * Orchestrates PR reviews. Clones the PR (optional), creates a non-posting
+ * candidate draft, runs it through a fresh independent verification session,
+ * and only then publishes the verified output through the GitHub client.
  */
 
 
-import { getPRDetails, getPRHeadSha, verifyReviewPosted } from '../github';
-import { buildAnalysisPrompt } from '../review-prompt';
+import {
+  getPRDetails,
+  getPRHeadSha,
+  postInlineReview,
+  postReviewCommentReply,
+  verifyReviewPosted,
+} from '../github';
 import { sessions_spawn } from '../utils/sessions_spawn';
-import { extractVerdict } from './verdict';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
 import { getReviewMemoryContext } from '../review-memory/review-memory-service';
+import { getReviewSeveritySummary, getReviewVerdict, ReviewDraft } from './review-draft';
+import { publishVerifiedDraft } from './review-publisher';
+import { runReviewVerificationGate } from './review-verification-gate';
 import ReviewedPRsState, { getSharedState } from '../utils/state-manager';
 import logger from '../utils/logger';
 import config from '../utils/config';
@@ -104,9 +111,16 @@ async function executeReview(
       }
     }
 
-    let reviewOutput: string;
+    let verifiedDraft: ReviewDraft | null = null;
     let subagentFailed = false;
     try {
+      if (!headSha) {
+        headSha = await getPRHeadSha(owner, repo, prNumber);
+      }
+      if (!headSha) {
+        throw new Error('Could not resolve current PR head SHA for verified review posting');
+      }
+
       let reviewMemory;
       try {
         reviewMemory = getReviewMemoryContext({ owner, repo, limit: config.reviewMemoryMaxLessons });
@@ -117,17 +131,33 @@ async function executeReview(
         logger.warn(`[review-memory] Failed to load context for ${owner}/${repo}#${prNumber}: ${(err as Error).message}`);
       }
 
-      const prompt = buildAnalysisPrompt({ owner, repo, prNumber, clonePath, isReReview, previousSha, reviewMemory });
-      logger.info(`[review-executor] Spawning review session for ${owner}/${repo}#${prNumber}${clonePath ? ' (clone mode)' : ' (gh mode)'}`);
-      reviewOutput = await sessions_spawn(prompt, clonePath ? { cwd: clonePath } : undefined);
-      if (!reviewOutput || !reviewOutput.trim()) {
-        throw new Error('sessions_spawn returned empty output');
-      }
+      logger.info(`[review-executor] Starting draft + independent verification gate for ${owner}/${repo}#${prNumber}${clonePath ? ' (clone mode)' : ' (gh mode)'}`);
+      verifiedDraft = await runReviewVerificationGate({
+        owner,
+        repo,
+        prNumber,
+        clonePath,
+        isReReview,
+        previousSha,
+        reviewMemory,
+        spawn: sessions_spawn,
+        publish: async (draft) => publishVerifiedDraft({
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha as string,
+          draft,
+          postInlineReview,
+          postReviewCommentReply,
+        }),
+      });
       const elapsed = Date.now() - startTime;
-      logger.info(`[review-executor] Subagent finished in ${elapsed}ms (${reviewOutput.length} chars)`);
+      logger.info(
+        `[review-executor] Verification gate passed in ${elapsed}ms ` +
+        `(${verifiedDraft.comments.length} inline comment(s), ${verifiedDraft.replies.length} reply/replies)`,
+      );
     } catch (err) {
-      logger.error(`[review-executor] Subagent failed: ${(err as Error).message}`);
-      reviewOutput = '';
+      logger.error(`[review-executor] Review draft/verification failed: ${(err as Error).message}`);
       subagentFailed = true;
     } finally {
       if (clonePath) {
@@ -136,10 +166,9 @@ async function executeReview(
       }
     }
 
-    // ── 4b. Verify the review actually landed on GitHub ──────────────────────
-    // A clean `claude` exit does not guarantee the subagent's
-    // `gh api .../reviews` call succeeded (e.g. all inline comments rejected
-    // with 422). Confirm a review by the bot exists at the current HEAD SHA.
+    // ── 4b. Verify the code-side publisher actually landed the review ─────────
+    // A successful draft/verification gate does not guarantee GitHub accepted
+    // the final API write (for example, an inline line can become invalid).
     let reviewMissing = false;
     if (!subagentFailed && headSha) {
       try {
@@ -180,8 +209,11 @@ async function executeReview(
       throw new Error(reason);
     }
 
-    // ── 6. Extract verdict + update state ────────────────────────────────────
-    const verdict: ReviewVerdict = extractVerdict(reviewOutput);
+    // ── 6. Derive verdict from the independently verified draft + update state ─
+    if (!verifiedDraft) {
+      throw new Error('Verified review draft is missing after a successful verification gate');
+    }
+    const verdict: ReviewVerdict = getReviewVerdict(verifiedDraft);
     const prStatus: PRStatus = verdict === 'already_reviewed' ? 'reviewed' : verdict;
 
     try {
@@ -192,10 +224,9 @@ async function executeReview(
     }
 
     // ── 7. Notify Discord — completion ───────────────────────────────────────
-    const issueList: string[] = [];
-    if (verdict === 'blocked')    issueList.push('🔴 Changes requested');
-    if (verdict === 'needs_work') issueList.push('🟡 Improvements suggested');
-    if (verdict === 'approved')   issueList.push('✅ Approved');
+    const issueList = verifiedDraft.comments.length > 0
+      ? [getReviewSeveritySummary(verifiedDraft)]
+      : [];
 
     try {
       const { sendReviewCompletedNotification } = require('../discord-notifier');

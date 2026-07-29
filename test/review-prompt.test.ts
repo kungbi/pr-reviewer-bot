@@ -1,5 +1,6 @@
 import { buildAnalysisPrompt } from '../src/review-prompt';
 import { ReviewMemoryContext } from '../src/types';
+import { BOT_AUTHOR_DISCLOSURE } from '../src/utils/comment-disclosure';
 
 describe('buildAnalysisPrompt', () => {
   it('injects repo-scoped review memory lessons when provided', () => {
@@ -67,5 +68,15 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('GitHub 리뷰 본문이나 인라인 코멘트에 쓰지 마라');
     expect(prompt).toContain('로컬 체크아웃에는 의존성이 없어');
     expect(prompt).toContain('실제 코드와 diff에서 확인한 근거가 있는 이슈만 게시해라');
+  });
+
+  it('requires every GitHub review/comment body to disclose bot authorship', () => {
+    const prompt = buildAnalysisPrompt({ owner: 'org', repo: 'repo', prNumber: 123 });
+    const disclosureJson = BOT_AUTHOR_DISCLOSURE.replace(/\n/g, '\\n');
+
+    expect(prompt).toContain('GitHub 댓글 작성자 표시 — 필수');
+    expect(prompt).toContain(BOT_AUTHOR_DISCLOSURE);
+    expect(prompt).toContain('전체 리뷰 body, 인라인 comments[].body, 기존 스레드 답글 body');
+    expect(prompt).toContain(`\\n\\n${disclosureJson}`);
   });
 });

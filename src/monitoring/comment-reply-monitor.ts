@@ -1,4 +1,5 @@
 import logger from '../utils/logger';
+import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
 import { ReviewComment } from '../types';
 
 export type ReplyVerdict = 'REPLY_NEEDED' | 'NO_REPLY';
@@ -162,6 +163,7 @@ Rules:
 - Do NOT reply to simple acknowledgements such as "thanks", "확인했습니다", "넵", reactions, or resolved/no-action notes.
 - Do NOT be defensive. If the bot was wrong, acknowledge it clearly.
 - Keep the reply short and specific. Do not invent facts outside the provided context.
+- Do not add the PR Reviewer Bot/AI authorship footer yourself; the bot process appends it before posting.
 - Return JSON only: {"verdict":"REPLY_NEEDED","body":"...","reason":"..."} or {"verdict":"NO_REPLY","reason":"..."}
 
 PR: ${owner}/${repo}#${prNumber}
@@ -232,7 +234,7 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
     });
 
     if (decision.verdict === 'REPLY_NEEDED' && decision.body?.trim()) {
-      const botReplyBody = decision.body.trim();
+      const botReplyBody = appendBotAuthorDisclosure(decision.body.trim());
       const postedReply = await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, botReplyBody);
       const botReplyUrl = getHtmlUrl(postedReply);
       await args.notifyReviewCommentReply?.({

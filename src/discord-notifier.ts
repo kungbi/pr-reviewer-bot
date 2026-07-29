@@ -142,9 +142,21 @@ async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle,
     statusEmoji = '✅';
     statusText = 'LGTM! No issues found.';
   } else {
-    color = 0xEF4444; // Red
-    statusEmoji = '⚠️';
-    statusText = `${issuesFound!.length} issue(s) found`;
+    const severitySummary = issuesFound!.join(' · ');
+    if (severitySummary.includes('🔴')) {
+      color = 0xEF4444; // Red: blocker present
+      statusEmoji = '🔴';
+    } else if (severitySummary.includes('🟡')) {
+      color = 0xF59E0B; // Amber: important findings only
+      statusEmoji = '🟡';
+    } else if (severitySummary.includes('🟢')) {
+      color = 0x10B981; // Green: minor findings only
+      statusEmoji = '🟢';
+    } else {
+      color = 0xEF4444; // Preserve the existing fallback for generic issue text.
+      statusEmoji = '⚠️';
+    }
+    statusText = severitySummary;
   }
 
   const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
