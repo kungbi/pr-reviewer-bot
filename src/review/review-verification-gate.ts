@@ -1,7 +1,10 @@
 import { ReviewMemoryContext } from '../types';
 import {
+  buildPonytailReviewPrompt,
   buildReviewDraftPrompt,
   buildReviewVerificationPrompt,
+  mergeReviewDrafts,
+  parsePonytailReviewDraft,
   parseReviewDraft,
   ReviewDraft,
 } from './review-draft';
@@ -40,8 +43,12 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
   };
   const spawnOptions = args.clonePath ? { cwd: args.clonePath } : undefined;
 
-  const candidateOutput = await args.spawn(buildReviewDraftPrompt(promptParams), spawnOptions);
-  const candidate = parseReviewDraft(candidateOutput);
+  const primaryOutput = await args.spawn(buildReviewDraftPrompt(promptParams), spawnOptions);
+  const primaryCandidate = parseReviewDraft(primaryOutput);
+
+  const ponytailOutput = await args.spawn(buildPonytailReviewPrompt(promptParams), spawnOptions);
+  const ponytailCandidate = parsePonytailReviewDraft(ponytailOutput);
+  const candidate = mergeReviewDrafts(primaryCandidate, ponytailCandidate);
 
   const verificationOutput = await args.spawn(
     buildReviewVerificationPrompt({ ...promptParams, candidate }),
