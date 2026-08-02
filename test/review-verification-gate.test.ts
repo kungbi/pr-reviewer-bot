@@ -77,6 +77,64 @@ describe('runReviewVerificationGate', () => {
     expect(spawn.mock.calls[2][0]).toContain('yagni: 계층 하나. 직접 호출로 대체.');
   });
 
+  it('rejects a verifier that escalates a Ponytail candidate above Minor', async () => {
+    const ponytailDraft = JSON.stringify({
+      summary: 'net: -8 lines possible.',
+      comments: [{
+        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: 'yagni: 계층 하나. 직접 호출로 대체.',
+      }],
+      replies: [],
+    });
+    const escalated = JSON.stringify({
+      summary: '검증 통과',
+      comments: [
+        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.' },
+        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'important', body: 'yagni: 계층 하나. 직접 호출로 대체.' },
+      ],
+      replies: [],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(firstDraft)
+      .mockResolvedValueOnce(ponytailDraft)
+      .mockResolvedValueOnce(escalated);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
+    })).rejects.toThrow('Ponytail findings must remain minor after verification');
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('rejects a verifier that removes a Ponytail tag', async () => {
+    const ponytailDraft = JSON.stringify({
+      summary: 'net: -8 lines possible.',
+      comments: [{
+        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: 'yagni: 계층 하나. 직접 호출로 대체.',
+      }],
+      replies: [],
+    });
+    const untagged = JSON.stringify({
+      summary: '검증 통과',
+      comments: [
+        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.' },
+        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: '계층 하나. 직접 호출로 대체.' },
+      ],
+      replies: [],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(firstDraft)
+      .mockResolvedValueOnce(ponytailDraft)
+      .mockResolvedValueOnce(untagged);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
+    })).rejects.toThrow('Ponytail findings must keep a supported tag after verification');
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it('does not publish when the independent verifier returns an invalid payload', async () => {
     const spawn = jest.fn()
       .mockResolvedValueOnce(firstDraft)

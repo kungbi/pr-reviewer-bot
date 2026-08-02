@@ -9,7 +9,14 @@ const SEVERITY_PRESENTATION: Record<DraftSeverity, string> = {
   minor: '🟢 **Minor**',
 };
 
+const SEVERITY_ALERT: Record<DraftSeverity, 'CAUTION' | 'IMPORTANT' | 'NOTE'> = {
+  blocker: 'CAUTION',
+  important: 'IMPORTANT',
+  minor: 'NOTE',
+};
+
 const LEADING_SEVERITY_LABEL = /^(?:🔴|🟡|🟢)?\s*(?:\*\*)?(?:Blocker|Important|Minor)(?:\*\*)?\s*(?:—|-|:)\s*/i;
+const PONYTAIL_TAG = /^(?:delete|stdlib|native|yagni|shrink):\s*/i;
 
 export interface DraftComment {
   path: string;
@@ -139,6 +146,9 @@ export function buildPonytailReviewPrompt(params: ReviewPromptParams): string {
 
 ## 역할과 범위
 과잉 설계와 불필요한 복잡성만 검토해라. 정상 코드 리뷰와 별도 패스다.
+- 이번 단계는 후보 초안만 작성한다. GitHub에 댓글·리뷰·답글을 게시하지 마라.
+- 로컬 파일·git 상태를 수정하지 마라. \`gh api\` 쓰기 요청, \`gh pr review\`, curl POST, git commit/push/reset/checkout을 실행하지 마라.
+- 최종 게시는 일반 리뷰와 함께 독립 검증을 통과한 뒤 봇 프로세스만 수행한다.
 - 정확성 버그, 보안, 성능, 접근성, 테스트 누락은 범위 밖이다. 발견해도 이 결과에 쓰지 마라.
 - smoke test·assert 기반 자체 검증은 bloat가 아니다. 삭제 대상으로 제안하지 마라.
 - 실제 PR 변경 코드와 구체적 대체안이 있을 때만 남긴다. 줄 수·취향만으로 지적하지 마라.
@@ -318,6 +328,9 @@ export function parsePonytailReviewDraft(output: string): ReviewDraft {
   if (draft.comments.some((comment) => comment.severity !== 'minor')) {
     throw new Error('invalid Ponytail draft: Ponytail findings must be minor');
   }
+  if (draft.comments.some((comment) => !PONYTAIL_TAG.test(comment.body))) {
+    throw new Error('invalid Ponytail draft: Ponytail findings must start with a supported tag');
+  }
   if (draft.replies.length > 0) {
     throw new Error('invalid Ponytail draft: Ponytail must not create replies');
   }
@@ -347,6 +360,31 @@ export function mergeReviewDrafts(primary: ReviewDraft, ponytail: ReviewDraft): 
   };
 }
 
+/** Enforces Ponytail's advisory contract after the independent verifier edits a draft. */
+export function validateVerifiedPonytailFindings(
+  verified: ReviewDraft,
+  combinedCandidate: ReviewDraft,
+): ReviewDraft {
+  const ponytailTargets = new Set(
+    combinedCandidate.comments
+      .filter((comment) => PONYTAIL_TAG.test(comment.body))
+      .map((comment) => `${comment.path}:${comment.line}:${comment.side}`),
+  );
+
+  for (const comment of verified.comments) {
+    const target = `${comment.path}:${comment.line}:${comment.side}`;
+    if (!ponytailTargets.has(target)) continue;
+    if (comment.severity !== 'minor') {
+      throw new Error('invalid verified Ponytail draft: Ponytail findings must remain minor after verification');
+    }
+    if (!PONYTAIL_TAG.test(comment.body)) {
+      throw new Error('invalid verified Ponytail draft: Ponytail findings must keep a supported tag after verification');
+    }
+  }
+
+  return verified;
+}
+
 export function getReviewSeverityCounts(draft: ReviewDraft): Record<DraftSeverity, number> {
   return draft.comments.reduce<Record<DraftSeverity, number>>((counts, comment) => {
     counts[comment.severity] += 1;
@@ -365,7 +403,9 @@ export function getReviewSeveritySummary(draft: ReviewDraft): string {
 
 function formatReviewCommentBody(severity: DraftSeverity, body: string): string {
   const withoutExistingLabel = body.trim().replace(LEADING_SEVERITY_LABEL, '');
-  return `${SEVERITY_PRESENTATION[severity]} — ${withoutExistingLabel}`;
+  const alert = PONYTAIL_TAG.test(withoutExistingLabel) ? 'TIP' : SEVERITY_ALERT[severity];
+  const quotedBody = withoutExistingLabel.replace(/\n/g, '\n> ');
+  return `> [!${alert}]\n> ${quotedBody}`;
 }
 
 export function getReviewEvent(draft: ReviewDraft): ReviewEvent {

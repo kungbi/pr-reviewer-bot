@@ -60,6 +60,8 @@ describe('review draft verification gate', () => {
     expect(prompt).toContain('net: -<N> lines possible.');
     expect(prompt).toContain('severity는 항상 minor');
     expect(prompt).toContain('replies는 항상 빈 배열');
+    expect(prompt).toContain('GitHub에 댓글·리뷰·답글을 게시하지 마라');
+    expect(prompt).toContain('로컬 파일·git 상태를 수정하지 마라');
   });
 
   it('accepts only Minor inline findings and no thread replies from Ponytail', () => {
@@ -70,6 +72,14 @@ describe('review draft verification gate', () => {
       }],
       replies: [],
     }))).toThrow('Ponytail findings must be minor');
+
+    expect(() => parsePonytailReviewDraft(JSON.stringify({
+      summary: 'net: -2 lines possible.',
+      comments: [{
+        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'minor', body: '불필요한 계층입니다.',
+      }],
+      replies: [],
+    }))).toThrow('Ponytail findings must start with a supported tag');
 
     expect(() => parsePonytailReviewDraft(JSON.stringify({
       summary: 'Lean already. Ship.',
@@ -172,9 +182,24 @@ describe('review draft verification gate', () => {
     const posting = prepareReviewForPosting(verified);
 
     expect(posting.body).toContain('🔴 **Blocker 1건** · 🟡 **Important 1건** · 🟢 **Minor 1건**');
-    expect(posting.comments[0].body).toMatch(/^🔴 \*\*Blocker\*\* — 음수 page를 차단하지 않습니다\./);
-    expect(posting.comments[1].body).toMatch(/^🟡 \*\*Important\*\* — 실패를 무시하고 있습니다\./);
-    expect(posting.comments[2].body).toMatch(/^🟢 \*\*Minor\*\* — 운영 로그에 요청 식별자가 없습니다\./);
+    expect(posting.comments[0].body).toMatch(/^> \[!CAUTION\]\n> 음수 page를 차단하지 않습니다\./);
+    expect(posting.comments[1].body).toMatch(/^> \[!IMPORTANT\]\n> 실패를 무시하고 있습니다\./);
+    expect(posting.comments[2].body).toMatch(/^> \[!NOTE\]\n> 운영 로그에 요청 식별자가 없습니다\./);
+  });
+
+  it('renders Ponytail simplification findings as a GitHub TIP alert', () => {
+    const posting = prepareReviewForPosting({
+      summary: '복잡성 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/adapter.ts', line: 13, side: 'RIGHT', severity: 'minor',
+        body: 'yagni: 구현체 하나뿐인 인터페이스입니다. 직접 주입으로 대체하세요.',
+      }],
+      replies: [],
+    });
+
+    expect(posting.comments[0].body).toMatch(
+      /^> \[!TIP\]\n> yagni: 구현체 하나뿐인 인터페이스입니다\. 직접 주입으로 대체하세요\./,
+    );
   });
 
   it('rejects malformed or unsafe draft payloads before any post can occur', () => {
