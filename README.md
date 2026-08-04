@@ -17,12 +17,12 @@ state/reviewed-prs.json으로 중복 방지
   - 같은 HEAD SHA면 skip
   - 새 commit이면 재리뷰
   ↓
-필요 시 PR branch를 /tmp에 shallow clone
+필요 시 standalone agent용 PR branch를 /tmp에 shallow clone
   ↓
-REVIEW_AGENT에 설정된 CLI agent 실행
-  - codex | claude | opencode
+REVIEW_AGENT에 설정된 agent 실행
+  - hermes(work profile) | codex | claude | opencode
   ↓
-agent가 GitHub review / inline comments 게시
+봇이 독립 검증을 통과한 draft만 GitHub review / inline comments로 게시
   ↓
 봇이 review 게시 여부 확인
   ↓
@@ -56,8 +56,9 @@ accepted / false_positive / project_convention 등으로 분류된 lesson만 다
 - Process manager: PM2 (`pr-reviewer-bot`)
 - Trigger: GitHub Search API polling
 - Review agent: `REVIEW_AGENT`로 선택
-  - 현재 운영값: `codex`
-  - 지원값: `codex`, `claude`, `opencode`
+  - 현재 운영값: `hermes` (`HERMES_PROFILE=work`)
+  - 지원값: `hermes`, `codex`, `claude`, `opencode`
+  - Hermes는 해당 profile의 provider auth/model과 SSH terminal backend를 사용하며, 로컬 clone 대신 원격 `gh` 읽기 경로로 PR을 탐색
 - State file: `state/reviewed-prs.json`
 - Review memory file: `state/review-memory.json` — review comment 논의 원문 archive + repo-scoped curated lesson 저장, git 제외
 - Reply monitor: `REPLY_MONITOR_ENABLED=true`일 때 봇 review comment에 달린 사람 답글을 감지해 필요한 경우 추가 답변
@@ -113,7 +114,8 @@ cp .env.example .env
 | `DISCORD_WEBHOOK_URL` | ✅ | 리뷰 시작/완료/실패 알림을 보낼 Discord incoming webhook URL |
 | `GH_TOKEN` | 권장 | GitHub API/clone/review 게시용 token. `gh auth`만으로는 일부 clone 경로가 실패할 수 있어 운영에서는 설정 권장 |
 | `GH_REVIEWER` | ✅ | 봇이 감시할 GitHub reviewer username |
-| `REVIEW_AGENT` | ✅ | 사용할 리뷰 agent. `codex`, `claude`, `opencode` 중 하나 |
+| `REVIEW_AGENT` | ✅ | 사용할 리뷰 agent. `hermes`, `codex`, `claude`, `opencode` 중 하나 |
+| `HERMES_PROFILE` | 선택 | `REVIEW_AGENT=hermes`일 때 실행할 Hermes profile. 기본 `work`; profile의 model/provider auth와 terminal backend를 사용 |
 | `CODEX_MODEL` | 선택 | `REVIEW_AGENT=codex`일 때 사용할 Codex model. 비우면 Codex CLI 기본값 |
 | `CODEX_REASONING_EFFORT` | 선택 | `REVIEW_AGENT=codex`일 때 `model_reasoning_effort` override. 현재 운영값 `xhigh` |
 | `REVIEW_TIMEOUT_MIN` | 선택 | PR 하나당 agent 실행 timeout, 분 단위 |
@@ -128,9 +130,8 @@ cp .env.example .env
 현재 운영에서는 다음처럼 둡니다.
 
 ```ini
-REVIEW_AGENT=codex
-CODEX_MODEL=gpt-5.5
-CODEX_REASONING_EFFORT=xhigh
+REVIEW_AGENT=hermes
+HERMES_PROFILE=work
 ```
 
 > `WEBHOOK_SECRET`는 현재 polling mode에서 사용하지 않습니다.
@@ -223,6 +224,21 @@ npx pm2 logs pr-reviewer-bot
 ## 리뷰 agent 설정
 
 `src/utils/agent-command.ts`에서 agent별 실행 커맨드를 생성합니다.
+
+### Hermes (권장)
+
+```ini
+REVIEW_AGENT=hermes
+HERMES_PROFILE=work
+```
+
+실행 형태:
+
+```text
+hermes --profile <HERMES_PROFILE> chat -Q -t terminal -q <prompt>
+```
+
+Hermes는 profile의 model/provider OAuth를 사용한다. runner는 `-t terminal`로 terminal tool만 노출한다. `work` profile은 SSH backend에서 실행되므로 봇 로컬 `/tmp` clone은 사용하지 않고, 해당 backend의 인증된 `gh` 읽기 명령으로 PR·diff·관련 코드를 탐색한다. 초안/독립 검증/게시 분리는 그대로 유지하며 GitHub 쓰기는 봇 프로세스만 수행한다.
 
 ### Codex
 

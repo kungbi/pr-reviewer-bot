@@ -1,4 +1,4 @@
-import { buildAgentInvocation, buildAgentSpawnPath, modelAgentMismatch } from '../src/utils/agent-command';
+import { buildAgentInvocation, buildAgentSpawnPath, modelAgentMismatch, shouldUseLocalClone } from '../src/utils/agent-command';
 
 describe('buildAgentSpawnPath', () => {
   it('prefers the current local Codex CLI before stale nvm installations', () => {
@@ -15,6 +15,13 @@ describe('buildAgentSpawnPath', () => {
 
   it('returns the original PATH when HOME is unavailable', () => {
     expect(buildAgentSpawnPath('/usr/bin:/bin', undefined)).toBe('/usr/bin:/bin');
+  });
+});
+
+describe('local clone policy', () => {
+  it('keeps local clones for standalone agents but uses GitHub read mode for Hermes', () => {
+    expect(shouldUseLocalClone('codex')).toBe(true);
+    expect(shouldUseLocalClone('hermes')).toBe(false);
   });
 });
 
@@ -62,6 +69,20 @@ describe('buildAgentInvocation', () => {
 
       expect(inv.args).toEqual(['run', '--dangerously-skip-permissions', PROMPT]);
       expect(inv.args).not.toContain('--model');
+    });
+  });
+
+  describe('hermes', () => {
+    it('runs a fresh work-profile Hermes chat and delivers the prompt as a query', () => {
+      const inv = buildAgentInvocation(PROMPT, 'hermes', null, null, 'work');
+
+      expect(inv.command).toBe('hermes');
+      expect(inv.args).toEqual([
+        '--profile', 'work',
+        'chat', '-Q', '-t', 'terminal', '-q', PROMPT,
+      ]);
+      expect(inv.promptViaStdin).toBe(false);
+      expect(inv.args[inv.args.length - 1]).toBe(PROMPT);
     });
   });
 

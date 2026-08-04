@@ -58,7 +58,7 @@ function optionalBool(name: string, defaultValue: boolean): boolean {
 const VALID_LOG_LEVELS = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
 
 // ── Review agent (computed early so the model default can depend on it) ─────────
-const VALID_REVIEW_AGENTS = ['claude', 'opencode', 'codex'] as const;
+const VALID_REVIEW_AGENTS = ['claude', 'opencode', 'codex', 'hermes'] as const;
 const VALID_CODEX_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 
 const reviewAgent: ReviewAgent = (() => {
@@ -71,21 +71,24 @@ const reviewAgent: ReviewAgent = (() => {
   return value as ReviewAgent;
 })();
 
-// Model passed to the review agent (review quality lever). The agents use
-// different model formats, so each reads its own env var — switching REVIEW_AGENT
-// alone is then safe, with no cross-format breakage:
+// Model passed to standalone review agents. The agents use different model
+// formats, so each reads its own env var — switching REVIEW_AGENT alone is safe:
 //   - claude   reads REVIEW_MODEL   (short alias, e.g. "opus"; default "opus")
 //   - opencode reads OPENCODE_MODEL ("provider/model", e.g. "google/gemini-2.5-flash";
 //              unset → null → opencode uses its own configured default)
 //   - codex    reads CODEX_MODEL    (bare name, e.g. "gpt-5.5", "gpt-5.2-codex";
 //              unset → null → codex uses its own configured default)
+//   - hermes   uses the selected Hermes profile's configured model/provider.
 const reviewModel: string | null = (() => {
   switch (reviewAgent) {
     case 'opencode': return optional('OPENCODE_MODEL', null);
     case 'codex':    return optional('CODEX_MODEL', null);
+    case 'hermes':   return null;
     default:         return optional('REVIEW_MODEL', 'opus'); // claude
   }
 })();
+
+const hermesProfile = optional('HERMES_PROFILE', 'work') as string;
 
 const codexReasoningEffort: string | null = (() => {
   const value = optional('CODEX_REASONING_EFFORT', null);
@@ -157,11 +160,12 @@ const config = {
   // Review agent CLI timeout for the review subagent (minutes → ms)
   reviewTimeoutMs: optionalInt('REVIEW_TIMEOUT_MIN', 20) * 60 * 1000,
 
-  // Which CLI coding agent is spawned for the review (claude | opencode)
+  // Which agent process is spawned for review (claude | opencode | codex | hermes)
   reviewAgent,
 
-  // Model for the review agent (null → agent's own default). See note above.
+  // Standalone-agent model; null means the selected agent/profile owns model choice.
   reviewModel,
+  hermesProfile,
   codexReasoningEffort,
 
   // Max PRs reviewed in parallel (caps memory from concurrent Opus subagents)
@@ -196,7 +200,17 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  PR_CLONE_DEPTH      : ${config.prCloneDepth}`);
   console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
   console.log(`  REVIEW_AGENT        : ${config.reviewAgent}`);
-  console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent default)'} (from ${config.reviewAgent === 'opencode' ? 'OPENCODE_MODEL' : config.reviewAgent === 'codex' ? 'CODEX_MODEL' : 'REVIEW_MODEL'})`);
+  const reviewModelSource = config.reviewAgent === 'opencode'
+    ? 'OPENCODE_MODEL'
+    : config.reviewAgent === 'codex'
+      ? 'CODEX_MODEL'
+      : config.reviewAgent === 'hermes'
+        ? 'Hermes profile'
+        : 'REVIEW_MODEL';
+  console.log(`  REVIEW_MODEL        : ${config.reviewModel ?? '(agent/profile default)'} (from ${reviewModelSource})`);
+  if (config.reviewAgent === 'hermes') {
+    console.log(`  HERMES_PROFILE      : ${config.hermesProfile}`);
+  }
   console.log(`  REVIEW_REASONING    : ${config.reviewAgent === 'codex' ? (config.codexReasoningEffort ?? '(codex default)') : '(n/a)'}`);
   console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
   console.log(`  REPLY_MONITOR       : ${config.replyMonitorEnabled}`);

@@ -15,6 +15,7 @@ import {
   verifyReviewPosted,
 } from '../github';
 import { sessions_spawn } from '../utils/sessions_spawn';
+import { shouldUseLocalClone } from '../utils/agent-command';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
 import { getReviewMemoryContext } from '../review-memory/review-memory-service';
 import { getReviewSeveritySummary, getReviewVerdict, ReviewDraft } from './review-draft';
@@ -101,7 +102,7 @@ async function executeReview(
 
     // ── 4. Clone (optional) + run subagent ───────────────────────────────────
     let clonePath: string | undefined;
-    if (config.prCloneEnabled) {
+    if (config.prCloneEnabled && shouldUseLocalClone(config.reviewAgent)) {
       const cloneResult = await cloneRepoForPR({ owner, repo, prNumber });
       if (cloneResult.ok) {
         clonePath = cloneResult.path;
@@ -109,6 +110,8 @@ async function executeReview(
       } else {
         logger.warn(`[review-executor] Clone failed (${cloneResult.reason}) — falling back to gh-based review`);
       }
+    } else if (config.prCloneEnabled) {
+      logger.info('[review-executor] Skipping local clone: Hermes reviews through its remote GitHub read path');
     }
 
     let verifiedDraft: ReviewDraft | null = null;

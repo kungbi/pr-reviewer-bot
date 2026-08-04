@@ -23,6 +23,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
     config.reviewAgent,
     config.reviewModel,
     config.codexReasoningEffort,
+    config.hermesProfile,
   );
   console.log(`[sessions_spawn] Spawning ${command} for analysis...`);
 

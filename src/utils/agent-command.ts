@@ -2,19 +2,29 @@
  * agent-command — build the spawn command/args for the configured review agent.
  *
  * Pure (no config / no side effects) so it can be unit-tested in isolation.
- * Three agents are supported:
+ * Four agents are supported:
  *   - claude   : `claude -p [--model <alias>] --dangerously-skip-permissions`
  *                prompt delivered via stdin.
  *   - opencode : `opencode run [--model <provider/model>] --dangerously-skip-permissions <prompt>`
  *                prompt delivered as a positional argument.
  *   - codex    : `codex exec [--model <name>] --dangerously-bypass-approvals-and-sandbox
  *                 --skip-git-repo-check <prompt>`
- *                prompt delivered as a positional argument. Uses the OpenAI Codex
- *                CLI, which works with ChatGPT-account OAuth (where opencode's
- *                openai path is blocked).
+ *                prompt delivered as a positional argument.
+ *   - hermes   : `hermes --profile <profile> chat -Q -t terminal -q <prompt>`
+ *                prompt delivered as a query. The profile owns provider auth and
+ *                the terminal/backend policy; only terminal tools are exposed.
  */
 
-export type ReviewAgent = 'claude' | 'opencode' | 'codex';
+export type ReviewAgent = 'claude' | 'opencode' | 'codex' | 'hermes';
+
+/**
+ * The work Hermes profile executes terminal tools on its SSH backend, so the
+ * bot's local /tmp clone is not visible there. Hermes reviews through its
+ * authenticated remote `gh` read-only path instead.
+ */
+export function shouldUseLocalClone(agent: ReviewAgent): boolean {
+  return agent !== 'hermes';
+}
 
 export interface AgentInvocation {
   command: string;
@@ -49,6 +59,7 @@ export function buildAgentInvocation(
   agent: ReviewAgent,
   model: string | null,
   codexReasoningEffort: string | null = null,
+  hermesProfile = 'work',
 ): AgentInvocation {
   if (agent === 'opencode') {
     return {
@@ -59,6 +70,14 @@ export function buildAgentInvocation(
         '--dangerously-skip-permissions',
         prompt,
       ],
+      promptViaStdin: false,
+    };
+  }
+
+  if (agent === 'hermes') {
+    return {
+      command: 'hermes',
+      args: ['--profile', hermesProfile, 'chat', '-Q', '-t', 'terminal', '-q', prompt],
       promptViaStdin: false,
     };
   }
