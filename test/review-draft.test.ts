@@ -7,6 +7,8 @@ import {
   parsePonytailReviewDraft,
   parseReviewDraft,
   prepareReviewForPosting,
+  validateVerifiedPonytailFindings,
+  validateVerifiedProposalFindings,
 } from '../src/review/review-draft';
 import { BOT_AUTHOR_DISCLOSURE } from '../src/utils/comment-disclosure';
 
@@ -19,6 +21,7 @@ describe('review draft verification gate', () => {
         line: 42,
         side: 'RIGHT' as const,
         severity: 'blocker' as const,
+        kind: 'finding' as const,
         body: '🔴 **Blocker** — 음수 page를 차단하지 않습니다.',
       },
     ],
@@ -40,6 +43,9 @@ describe('review draft verification gate', () => {
     expect(prompt).toContain('JSON만 반환');
     expect(prompt).toContain('comments');
     expect(prompt).toContain('replies');
+    expect(prompt).toContain('"kind": "finding|proposal"');
+    expect(prompt).toContain('개선성 제안');
+    expect(prompt).toContain('"benefit"');
   });
 
   it('runs Ponytail as a separate complexity-only reviewer', () => {
@@ -56,6 +62,9 @@ describe('review draft verification gate', () => {
     expect(prompt).toContain('stdlib:');
     expect(prompt).toContain('native:');
     expect(prompt).toContain('yagni:');
+    expect(prompt).toContain('호출자 하나는 조사 신호일 뿐');
+    expect(prompt).toContain('trade-off');
+    expect(prompt).toContain('"convention"');
     expect(prompt).toContain('shrink:');
     expect(prompt).toContain('net: -<N> lines possible.');
     expect(prompt).toContain('severity는 항상 minor');
@@ -68,24 +77,231 @@ describe('review draft verification gate', () => {
     expect(() => parsePonytailReviewDraft(JSON.stringify({
       summary: 'net: -12 lines possible.',
       comments: [{
-        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'important', body: 'yagni: 계층 하나. 직접 호출로 대체.',
+        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'important', kind: 'proposal', body: 'yagni: 계층 하나. 직접 호출로 대체.',
       }],
       replies: [],
-    }))).toThrow('Ponytail findings must be minor');
+    }))).toThrow('proposal comments must be minor');
 
     expect(() => parsePonytailReviewDraft(JSON.stringify({
       summary: 'net: -2 lines possible.',
       comments: [{
-        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'minor', body: '불필요한 계층입니다.',
+        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: '불필요한 계층입니다.',
+        proposal: {
+          proposal: '직접 호출로 대체합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.',
+          convention: '유사 패턴이 없습니다.', scope: 'current_pr',
+        },
       }],
       replies: [],
     }))).toThrow('Ponytail findings must start with a supported tag');
+
+    expect(() => parsePonytailReviewDraft(JSON.stringify({
+      summary: 'net: -2 lines possible.',
+      comments: [{
+        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'finding',
+        body: 'yagni: 계층 하나. 직접 호출로 대체.',
+      }],
+      replies: [],
+    }))).toThrow('Ponytail findings must be proposals');
 
     expect(() => parsePonytailReviewDraft(JSON.stringify({
       summary: 'Lean already. Ship.',
       comments: [],
       replies: [{ commentId: 12, severity: 'minor', body: 'reply' }],
     }))).toThrow('Ponytail must not create replies');
+  });
+
+  it('rejects a verifier that strips the trade-off contract from a Ponytail proposal', () => {
+    const ponytail = parsePonytailReviewDraft(JSON.stringify({
+      summary: 'net: -2 lines possible.',
+      comments: [{
+        path: 'src/a.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: 'yagni: 계층 하나.',
+        proposal: { proposal: '직접 호출로 바꿉니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' },
+      }], replies: [],
+    }));
+    const stripped = {
+      ...ponytail,
+      comments: [{ ...ponytail.comments[0], kind: 'finding' as const, proposal: undefined }],
+    };
+
+    expect(() => validateVerifiedPonytailFindings(stripped, ponytail))
+      .toThrow('Ponytail findings must remain proposals after verification');
+  });
+
+  it('rejects a verifier that strips the trade-off contract from a normal proposal', () => {
+    const candidate = parseReviewDraft(JSON.stringify({
+      summary: '구조 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 12, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+        proposal: {
+          proposal: '중간 계층을 제거하고 직접 호출합니다.',
+          benefit: '현재 경로의 중복 위임을 제거합니다.',
+          risk: '타입 경계와 레포 일관성이 약해질 수 있습니다.',
+          convention: '유사 계층의 호출자와 테스트 계약을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    }));
+    const stripped = {
+      ...candidate,
+      comments: [{ ...candidate.comments[0], kind: 'finding' as const, proposal: undefined }],
+    };
+
+    expect(() => validateVerifiedProposalFindings(stripped, candidate))
+      .toThrow('verified comments must retain candidate kind, severity, and body');
+  });
+
+  it('rejects a verifier that changes a proposal target to bypass the trade-off contract', () => {
+    const candidate = parseReviewDraft(JSON.stringify({
+      summary: '구조 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 12, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+        proposal: {
+          proposal: '중간 계층을 제거하고 직접 호출합니다.',
+          benefit: '현재 경로의 중복 위임을 제거합니다.',
+          risk: '타입 경계와 레포 일관성이 약해질 수 있습니다.',
+          convention: '유사 계층과 테스트 계약을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    }));
+    const shifted = parseReviewDraft(JSON.stringify({
+      summary: '검증 통과',
+      comments: [{
+        path: 'src/example.ts', line: 13, side: 'RIGHT', severity: 'minor', kind: 'finding',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+      }],
+      replies: [],
+    }));
+
+    expect(() => validateVerifiedProposalFindings(shifted, candidate))
+      .toThrow('verified comments must be a subset of candidate targets');
+  });
+
+  it('rejects a verifier that moves a proposal into a new thread reply', () => {
+    const candidate = parseReviewDraft(JSON.stringify({
+      summary: '구조 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 12, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+        proposal: {
+          proposal: '중간 계층을 제거하고 직접 호출합니다.',
+          benefit: '현재 경로의 중복 위임을 제거합니다.',
+          risk: '타입 경계와 레포 일관성이 약해질 수 있습니다.',
+          convention: '유사 계층과 테스트 계약을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    }));
+    const movedToReply = parseReviewDraft(JSON.stringify({
+      summary: '검증 통과',
+      comments: [],
+      replies: [{
+        commentId: 88,
+        severity: 'minor',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+      }],
+    }));
+
+    expect(() => validateVerifiedProposalFindings(movedToReply, candidate))
+      .toThrow('verified replies must be a subset of candidate reply IDs');
+  });
+
+  it('rejects a verifier that reclassifies a finding as a proposal on the original target', () => {
+    const candidate = parseReviewDraft(JSON.stringify({
+      summary: '현재 오류 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 12, side: 'RIGHT', severity: 'important', kind: 'finding',
+        body: '실패한 요청이 성공으로 처리됩니다.',
+      }],
+      replies: [],
+    }));
+    const downgraded = parseReviewDraft(JSON.stringify({
+      summary: '검증 통과',
+      comments: [{
+        path: 'src/example.ts', line: 12, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '실패한 요청이 성공으로 처리됩니다.',
+        proposal: {
+          proposal: '응답 처리를 바꿉니다.',
+          benefit: '분기 하나를 줄입니다.',
+          risk: '실제 오류를 가릴 수 있습니다.',
+          convention: '유사 구현을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    }));
+
+    expect(() => validateVerifiedProposalFindings(downgraded, candidate))
+      .toThrow('verified comments must retain candidate kind, severity, and body');
+  });
+
+  it('rejects a verifier that overwrites an existing reply with a removed proposal', () => {
+    const candidate = parseReviewDraft(JSON.stringify({
+      summary: '구조 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 12, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+        proposal: {
+          proposal: '중간 계층을 제거하고 직접 호출합니다.',
+          benefit: '현재 경로의 중복 위임을 제거합니다.',
+          risk: '타입 경계와 레포 일관성이 약해질 수 있습니다.',
+          convention: '유사 계층과 테스트 계약을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [{ commentId: 88, severity: 'minor', body: '원래 스레드의 검증된 근거입니다.' }],
+    }));
+    const overwrittenReply = parseReviewDraft(JSON.stringify({
+      summary: '검증 통과',
+      comments: [],
+      replies: [{
+        commentId: 88,
+        severity: 'minor',
+        body: '직접 호출로 단순화하는 선택지입니다.',
+      }],
+    }));
+
+    expect(() => validateVerifiedProposalFindings(overwrittenReply, candidate))
+      .toThrow('verified replies must retain candidate severity and body');
+  });
+
+  it('rejects a proposal comment that omits a required trade-off field', () => {
+    expect(() => parseReviewDraft(JSON.stringify({
+      summary: '구조 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 1, side: 'RIGHT', severity: 'minor',
+        kind: 'proposal', body: '구조를 단순화합니다.',
+      }],
+      replies: [],
+    }))).toThrow('proposal');
+  });
+
+  it('renders a validated proposal with its trade-offs', () => {
+    const draft = parseReviewDraft(JSON.stringify({
+      summary: '구조 개선 후보가 있습니다.',
+      comments: [{
+        path: 'src/example.ts', line: 1, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '전용 계층을 직접 호출로 바꾸는 선택지입니다.',
+        proposal: {
+          proposal: '전용 계층을 제거하고 직접 호출합니다.',
+          benefit: '파일 하나와 import를 줄입니다.',
+          risk: '기존 타입 계약과 패턴 일관성이 약해집니다.',
+          convention: '유사 타입이 이 repo에 존재합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    }));
+
+    const body = prepareReviewForPosting(draft).comments[0].body;
+    expect(body).toContain('**이점**: 파일 하나와 import를 줄입니다.');
+    expect(body).toContain('**리스크**: 기존 타입 계약과 패턴 일관성이 약해집니다.');
+    expect(body).toContain('**권장 범위**: 별도 후속 리팩터링');
   });
 
   it('merges a separate Ponytail draft without duplicating normal-review targets', () => {
@@ -145,6 +361,10 @@ describe('review draft verification gate', () => {
     expect(prompt).toContain('각 코멘트의 파일·라인·실행 경로를 실제 코드와 diff로 다시 확인');
     expect(prompt).toContain('확신이 부족하면 제거');
     expect(prompt).toContain('Ponytail 태그');
+    expect(prompt).toContain('타입 계약');
+    expect(prompt).toContain('실질적인 복잡성 감소');
+    expect(prompt).toContain('proposal');
+    expect(prompt).toContain('원본 후보의 target·kind·severity·body·proposal·reply');
     expect(prompt).toContain('GitHub에 어떠한 변경도 게시하지 마라');
   });
 
@@ -183,15 +403,15 @@ describe('review draft verification gate', () => {
       summary: '검증된 이슈가 있습니다.',
       comments: [
         {
-          path: 'src/search.ts', line: 42, side: 'RIGHT', severity: 'blocker',
+          path: 'src/search.ts', line: 42, side: 'RIGHT', severity: 'blocker', kind: 'finding',
           body: '음수 page를 차단하지 않습니다.',
         },
         {
-          path: 'src/cache.ts', line: 11, side: 'RIGHT', severity: 'important',
+          path: 'src/cache.ts', line: 11, side: 'RIGHT', severity: 'important', kind: 'finding',
           body: '실패를 무시하고 있습니다.',
         },
         {
-          path: 'src/log.ts', line: 7, side: 'RIGHT', severity: 'minor',
+          path: 'src/log.ts', line: 7, side: 'RIGHT', severity: 'minor', kind: 'finding',
           body: '운영 로그에 요청 식별자가 없습니다.',
         },
       ],
@@ -227,6 +447,17 @@ describe('review draft verification gate', () => {
       comments: [],
       replies: [{ commentId: 12, body: '이 경로도 오류가 납니다.' }],
     }))).toThrow('invalid review draft: replies[].severity is invalid');
+  });
+
+  it('rejects duplicate existing-thread reply targets', () => {
+    expect(() => parseReviewDraft(JSON.stringify({
+      summary: '기존 스레드에 추가 근거가 있습니다.',
+      comments: [],
+      replies: [
+        { commentId: 12, severity: 'minor', body: '첫 번째 근거입니다.' },
+        { commentId: 12, severity: 'minor', body: '중복된 근거입니다.' },
+      ],
+    }))).toThrow('duplicate reply target 12');
   });
 
   it('rejects malformed or unsafe draft payloads before any post can occur', () => {

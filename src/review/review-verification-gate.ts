@@ -8,6 +8,7 @@ import {
   parseReviewDraft,
   ReviewDraft,
   validateVerifiedPonytailFindings,
+  validateVerifiedProposalFindings,
 } from './review-draft';
 
 export interface ReviewAgentSpawnOptions {
@@ -55,10 +56,11 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     buildReviewVerificationPrompt({ ...promptParams, candidate }),
     spawnOptions,
   );
-  const verified = validateVerifiedPonytailFindings(
+  const verifiedDraft = validateVerifiedProposalFindings(
     parseReviewDraft(verificationOutput),
     candidate,
   );
+  const verified = validateVerifiedPonytailFindings(verifiedDraft, candidate);
 
   await args.publish(verified);
   return verified;

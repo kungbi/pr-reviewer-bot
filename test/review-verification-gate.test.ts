@@ -4,7 +4,7 @@ describe('runReviewVerificationGate', () => {
   const firstDraft = JSON.stringify({
     summary: '1차 후보',
     comments: [{
-      path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.',
+      path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.',
     }],
     replies: [],
   });
@@ -16,7 +16,7 @@ describe('runReviewVerificationGate', () => {
   const verifiedDraft = JSON.stringify({
     summary: '검증 통과: 실제 오류 처리 누락',
     comments: [{
-      path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.',
+      path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.',
     }],
     replies: [],
   });
@@ -48,15 +48,15 @@ describe('runReviewVerificationGate', () => {
     const ponytailDraft = JSON.stringify({
       summary: 'net: -8 lines possible.',
       comments: [{
-        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: 'yagni: 계층 하나. 직접 호출로 대체.',
+        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: 'yagni: 계층 하나. 직접 호출로 대체.', proposal: { proposal: '계층을 제거하고 직접 호출합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' },
       }],
       replies: [],
     });
     const verifiedCombined = JSON.stringify({
       summary: '검증 통과',
       comments: [
-        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.' },
-        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: 'yagni: 계층 하나. 직접 호출로 대체.' },
+        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
+        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: 'yagni: 계층 하나. 직접 호출로 대체.', proposal: { proposal: '계층을 제거하고 직접 호출합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' } },
       ],
       replies: [],
     });
@@ -77,19 +77,85 @@ describe('runReviewVerificationGate', () => {
     expect(spawn.mock.calls[2][0]).toContain('yagni: 계층 하나. 직접 호출로 대체.');
   });
 
+  it('does not publish when verification reclassifies a normal proposal as a finding', async () => {
+    const proposalDraft = JSON.stringify({
+      summary: '구조 개선 후보',
+      comments: [{
+        path: 'src/adapter.ts', line: 21, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '중간 위임 계층을 직접 호출로 바꾸는 선택지입니다.',
+        proposal: {
+          proposal: '중간 위임 계층을 제거하고 직접 호출합니다.',
+          benefit: '현재 경로의 중복 위임을 줄입니다.',
+          risk: '타입 경계와 레포 컨벤션이 약해질 수 있습니다.',
+          convention: '유사 계층과 테스트 계약을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    });
+    const reclassified = JSON.stringify({
+      summary: '검증 통과',
+      comments: [{
+        path: 'src/adapter.ts', line: 21, side: 'RIGHT', severity: 'minor', kind: 'finding',
+        body: '중간 위임 계층을 직접 호출로 바꾸는 선택지입니다.',
+      }],
+      replies: [],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(proposalDraft)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(reclassified);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
+    })).rejects.toThrow('verified comments must retain candidate kind, severity, and body');
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('does not publish when verification downgrades a finding to a proposal', async () => {
+    const downgraded = JSON.stringify({
+      summary: '검증 통과',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'minor', kind: 'proposal',
+        body: '처리되지 않은 오류가 있습니다.',
+        proposal: {
+          proposal: '오류 처리를 단순화합니다.',
+          benefit: '분기 하나를 줄입니다.',
+          risk: '실제 오류를 가릴 수 있습니다.',
+          convention: '유사 구현을 비교해야 합니다.',
+          scope: 'follow_up',
+        },
+      }],
+      replies: [],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(firstDraft)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(downgraded);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
+    })).rejects.toThrow('verified comments must retain candidate kind, severity, and body');
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it('rejects a verifier that escalates a Ponytail candidate above Minor', async () => {
     const ponytailDraft = JSON.stringify({
       summary: 'net: -8 lines possible.',
       comments: [{
-        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: 'yagni: 계층 하나. 직접 호출로 대체.',
+        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: 'yagni: 계층 하나. 직접 호출로 대체.', proposal: { proposal: '계층을 제거하고 직접 호출합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' },
       }],
       replies: [],
     });
     const escalated = JSON.stringify({
       summary: '검증 통과',
       comments: [
-        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.' },
-        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'important', body: 'yagni: 계층 하나. 직접 호출로 대체.' },
+        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
+        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'important', kind: 'proposal', body: 'yagni: 계층 하나. 직접 호출로 대체.', proposal: { proposal: '계층을 제거하고 직접 호출합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' } },
       ],
       replies: [],
     });
@@ -101,7 +167,7 @@ describe('runReviewVerificationGate', () => {
 
     await expect(runReviewVerificationGate({
       owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
-    })).rejects.toThrow('Ponytail findings must remain minor after verification');
+    })).rejects.toThrow('proposal comments must be minor');
 
     expect(publish).not.toHaveBeenCalled();
   });
@@ -110,15 +176,15 @@ describe('runReviewVerificationGate', () => {
     const ponytailDraft = JSON.stringify({
       summary: 'net: -8 lines possible.',
       comments: [{
-        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: 'yagni: 계층 하나. 직접 호출로 대체.',
+        path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: 'yagni: 계층 하나. 직접 호출로 대체.', proposal: { proposal: '계층을 제거하고 직접 호출합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' },
       }],
       replies: [],
     });
     const untagged = JSON.stringify({
       summary: '검증 통과',
       comments: [
-        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', body: '처리되지 않은 오류가 있습니다.' },
-        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', body: '계층 하나. 직접 호출로 대체.' },
+        { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
+        { path: 'src/b.ts', line: 4, side: 'RIGHT', severity: 'minor', kind: 'proposal', body: '계층 하나. 직접 호출로 대체.', proposal: { proposal: '계층을 제거하고 직접 호출합니다.', benefit: '계층 하나를 줄입니다.', risk: '타입 경계가 약해집니다.', convention: '유사 패턴이 없습니다.', scope: 'current_pr' } },
       ],
       replies: [],
     });
@@ -130,7 +196,7 @@ describe('runReviewVerificationGate', () => {
 
     await expect(runReviewVerificationGate({
       owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
-    })).rejects.toThrow('Ponytail findings must keep a supported tag after verification');
+    })).rejects.toThrow('verified comments must retain candidate kind, severity, and body');
 
     expect(publish).not.toHaveBeenCalled();
   });
