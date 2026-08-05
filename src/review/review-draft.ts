@@ -28,6 +28,7 @@ export interface DraftComment {
 
 export interface DraftReply {
   commentId: number;
+  severity: DraftSeverity;
   body: string;
 }
 
@@ -126,6 +127,7 @@ ${buildExplorationSection(params)}${buildReviewMemorySection(params.reviewMemory
   "replies": [
     {
       "commentId": 123,
+      "severity": "blocker|important|minor",
       "body": "기존 리뷰 스레드에 추가할 근거 있는 한국어 답글"
     }
   ]
@@ -133,6 +135,7 @@ ${buildExplorationSection(params)}${buildReviewMemorySection(params.reviewMemory
 
 - footer/작성자 표시는 넣지 마라. 게시 프로세스가 강제 추가한다.
 - comments/replies가 없으면 빈 배열을 반환한다.
+- replies도 최종 리뷰의 이슈 집계와 승인 이벤트에 반영된다. 기존 스레드에 추가하는 내용이 버그/위험이면 해당 severity를 반드시 지정하고, 단순 감사·확인 답글은 후보에 넣지 마라.
 - 이슈를 발견하지 못한 것은 실패가 아니다. 억지로 채우지 마라.`;
 }
 
@@ -265,6 +268,13 @@ function normalizePath(value: unknown): string {
   return path;
 }
 
+function normalizeSeverity(value: unknown, name: string): DraftSeverity {
+  if (value !== 'blocker' && value !== 'important' && value !== 'minor') {
+    throw new Error(`invalid review draft: ${name} is invalid`);
+  }
+  return value;
+}
+
 function normalizeComment(value: unknown): DraftComment {
   const candidate = requireRecord(value, 'comments[]');
   const line = candidate.line;
@@ -274,14 +284,11 @@ function normalizeComment(value: unknown): DraftComment {
   if (candidate.side !== 'LEFT' && candidate.side !== 'RIGHT') {
     throw new Error('invalid review draft: comments[].side must be LEFT or RIGHT');
   }
-  if (candidate.severity !== 'blocker' && candidate.severity !== 'important' && candidate.severity !== 'minor') {
-    throw new Error('invalid review draft: comments[].severity is invalid');
-  }
   return {
     path: normalizePath(candidate.path),
     line: line as number,
     side: candidate.side,
-    severity: candidate.severity,
+    severity: normalizeSeverity(candidate.severity, 'comments[].severity'),
     body: requireText(candidate.body, 'comments[].body', 12000),
   };
 }
@@ -294,6 +301,7 @@ function normalizeReply(value: unknown): DraftReply {
   }
   return {
     commentId: commentId as number,
+    severity: normalizeSeverity(candidate.severity, 'replies[].severity'),
     body: requireText(candidate.body, 'replies[].body', 12000),
   };
 }
@@ -386,8 +394,8 @@ export function validateVerifiedPonytailFindings(
 }
 
 export function getReviewSeverityCounts(draft: ReviewDraft): Record<DraftSeverity, number> {
-  return draft.comments.reduce<Record<DraftSeverity, number>>((counts, comment) => {
-    counts[comment.severity] += 1;
+  return [...draft.comments, ...draft.replies].reduce<Record<DraftSeverity, number>>((counts, finding) => {
+    counts[finding.severity] += 1;
     return counts;
   }, { blocker: 0, important: 0, minor: 0 });
 }
@@ -409,15 +417,22 @@ function formatReviewCommentBody(severity: DraftSeverity, body: string): string 
 }
 
 export function getReviewEvent(draft: ReviewDraft): ReviewEvent {
-  if (draft.comments.some((comment) => comment.severity === 'blocker')) return 'REQUEST_CHANGES';
-  if (draft.comments.some((comment) => comment.severity === 'important')) return 'COMMENT';
+  const counts = getReviewSeverityCounts(draft);
+  if (counts.blocker > 0) return 'REQUEST_CHANGES';
+  if (counts.important > 0) return 'COMMENT';
   return 'APPROVE';
 }
 
 export function getReviewVerdict(draft: ReviewDraft): ReviewVerdict {
-  if (draft.comments.some((comment) => comment.severity === 'blocker')) return 'blocked';
-  if (draft.comments.some((comment) => comment.severity === 'important')) return 'needs_work';
+  const counts = getReviewSeverityCounts(draft);
+  if (counts.blocker > 0) return 'blocked';
+  if (counts.important > 0) return 'needs_work';
   return 'approved';
+}
+
+function formatReviewReplyBody(severity: DraftSeverity, body: string): string {
+  const withoutExistingLabel = body.trim().replace(LEADING_SEVERITY_LABEL, '');
+  return `${SEVERITY_PRESENTATION[severity]} — ${withoutExistingLabel}`;
 }
 
 export function prepareReviewForPosting(draft: ReviewDraft): ReviewPostingPayload {
@@ -430,9 +445,10 @@ export function prepareReviewForPosting(draft: ReviewDraft): ReviewPostingPayloa
       side,
       body: appendBotAuthorDisclosure(formatReviewCommentBody(severity, body)),
     })),
-    replies: draft.replies.map((reply) => ({
-      commentId: reply.commentId,
-      body: appendBotAuthorDisclosure(reply.body),
+    replies: draft.replies.map(({ commentId, severity, body }) => ({
+      commentId,
+      severity,
+      body: appendBotAuthorDisclosure(formatReviewReplyBody(severity, body)),
     })),
   };
 }

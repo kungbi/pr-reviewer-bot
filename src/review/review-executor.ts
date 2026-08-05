@@ -227,9 +227,8 @@ async function executeReview(
     }
 
     // ── 7. Notify Discord — completion ───────────────────────────────────────
-    const issueList = verifiedDraft.comments.length > 0
-      ? [getReviewSeveritySummary(verifiedDraft)]
-      : [];
+    const severitySummary = getReviewSeveritySummary(verifiedDraft);
+    const issueList = severitySummary === '✅ **이슈 없음**' ? [] : [severitySummary];
 
     try {
       const { sendReviewCompletedNotification } = require('../discord-notifier');

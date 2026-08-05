@@ -23,7 +23,7 @@ describe('review draft verification gate', () => {
       },
     ],
     replies: [
-      { commentId: 99, body: '기존 코멘트의 원인은 아직 남아 있습니다.' },
+      { commentId: 99, severity: 'blocker' as const, body: '기존 코멘트의 원인은 아직 남아 있습니다.' },
     ],
   };
 
@@ -84,7 +84,7 @@ describe('review draft verification gate', () => {
     expect(() => parsePonytailReviewDraft(JSON.stringify({
       summary: 'Lean already. Ship.',
       comments: [],
-      replies: [{ commentId: 12, body: 'reply' }],
+      replies: [{ commentId: 12, severity: 'minor', body: 'reply' }],
     }))).toThrow('Ponytail must not create replies');
   });
 
@@ -94,7 +94,7 @@ describe('review draft verification gate', () => {
       comments: [{
         path: 'src/a.ts', line: 10, side: 'RIGHT' as const, severity: 'important' as const, body: '오류 처리 누락',
       }],
-      replies: [{ commentId: 9, body: '기존 답글' }],
+      replies: [{ commentId: 9, severity: 'important' as const, body: '기존 답글' }],
     };
     const ponytail = {
       summary: 'net: -8 lines possible.',
@@ -159,6 +159,25 @@ describe('review draft verification gate', () => {
     expect(posting.replies[0].body).toContain(BOT_AUTHOR_DISCLOSURE);
   });
 
+  it('does not approve when an Important finding is posted as an existing-thread reply', () => {
+    const verified = parseReviewDraft(JSON.stringify({
+      summary: '기존 배열형 쿼리 스레드에 인증 경로 500 가능성을 추가했습니다.',
+      comments: [],
+      replies: [{
+        commentId: 99,
+        severity: 'important',
+        body: '반복 Authorization 쿼리가 배열로 전달되면 500이 발생합니다.',
+      }],
+    }));
+
+    const posting = prepareReviewForPosting(verified);
+
+    expect(getReviewVerdict(verified)).toBe('needs_work');
+    expect(posting.event).toBe('COMMENT');
+    expect(posting.body).toContain('🟡 **Important 1건**');
+    expect(posting.replies[0].body).toContain(BOT_AUTHOR_DISCLOSURE);
+  });
+
   it('renders a code-derived severity breakdown and label even when the verifier body omits it', () => {
     const verified = parseReviewDraft(JSON.stringify({
       summary: '검증된 이슈가 있습니다.',
@@ -200,6 +219,14 @@ describe('review draft verification gate', () => {
     expect(posting.comments[0].body).toMatch(
       /^> \[!TIP\]\n> yagni: 구현체 하나뿐인 인터페이스입니다\. 직접 주입으로 대체하세요\./,
     );
+  });
+
+  it('rejects an existing-thread reply that does not declare its severity', () => {
+    expect(() => parseReviewDraft(JSON.stringify({
+      summary: '기존 스레드에 추가 근거가 있습니다.',
+      comments: [],
+      replies: [{ commentId: 12, body: '이 경로도 오류가 납니다.' }],
+    }))).toThrow('invalid review draft: replies[].severity is invalid');
   });
 
   it('rejects malformed or unsafe draft payloads before any post can occur', () => {
