@@ -1,13 +1,14 @@
 import cron from 'node-cron';
 import axios from 'axios';
 import { executeReviewWithRetry } from './review/polling-reviewer';
-import { executeReview } from './review/review-executor';
+import { executeReview, isReviewDraining } from './review/review-executor';
 import { getPRHeadSha, getAuthenticatedLogin, listReviewComments, postReviewCommentReply } from './github';
 import { judgeAndDraftReply, processReviewCommentReplies } from './monitoring/comment-reply-monitor';
 import { sendDiscordNotification } from './discord-notifier';
 import { archiveAndMaybeLearnFromThread } from './review-memory/review-memory-service';
 import { getSharedReviewMemoryStore } from './review-memory/review-memory-store';
 import { getSharedState } from './utils/state-manager';
+import { GracefulShutdown, GracefulShutdownResult } from './utils/graceful-shutdown';
 import config from './utils/config';
 import logger from './utils/logger';
 import { PRInfo, RetryOutcome } from './types';
@@ -18,6 +19,12 @@ interface GitHubPRItem {
   number: number;
   title: string;
   html_url: string;
+}
+
+type ShouldStop = () => boolean;
+
+export interface PollingController {
+  stop(timeoutMs: number): Promise<GracefulShutdownResult>;
 }
 
 function getHeaders(): Record<string, string> {
@@ -42,7 +49,11 @@ function getRepoInfo(pr: GitHubPRItem): { owner: string; name: string } {
   };
 }
 
-async function pollAssignedPRs(): Promise<void> {
+async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<void> {
+  if (shouldStop()) {
+    logger.info('[POLLER] Draining; skipping assigned-PR poll');
+    return;
+  }
   logger.info('[POLLER] Checking for assigned PRs...');
 
   try {
@@ -50,13 +61,20 @@ async function pollAssignedPRs(): Promise<void> {
     const items: GitHubPRItem[] = Array.isArray(itemsRaw) ? itemsRaw : [];
 
     logger.info(`[POLLER] Found ${items.length} PR(s) where I am requested as reviewer`);
-
     if (items.length === 0) return;
+    if (shouldStop()) {
+      logger.info('[POLLER] Draining; not starting discovered PR reviews');
+      return;
+    }
 
     const state = getSharedState();
 
     const newPRs: Array<{ pr: GitHubPRItem; owner: string; repo: string }> = [];
     for (const pr of items) {
+      if (shouldStop()) {
+        logger.info('[POLLER] Draining; stopped PR discovery before state was locked');
+        return;
+      }
       const { owner, name: repo } = getRepoInfo(pr);
       const prLabel = `${owner}/${repo}#${pr.number}`;
 
@@ -96,10 +114,6 @@ async function pollAssignedPRs(): Promise<void> {
 
     if (newPRs.length === 0) return;
 
-    for (const { owner, repo, pr } of newPRs) {
-      state.markPRReviewing(owner, repo, pr.number);
-    }
-
     const concurrency = Math.max(1, config.reviewConcurrency);
     logger.info(`[POLLER] Reviewing ${newPRs.length} PR(s), up to ${concurrency} at a time...`);
 
@@ -107,7 +121,14 @@ async function pollAssignedPRs(): Promise<void> {
     // exhaust memory and trip PM2's max_memory_restart.
     const results: Array<{ owner: string; repo: string; pr: GitHubPRItem; outcome: RetryOutcome }> = [];
     for (let i = 0; i < newPRs.length; i += concurrency) {
+      if (shouldStop()) {
+        logger.info(`[POLLER] Draining; leaving ${newPRs.length - i} queued PR(s) for the next process`);
+        break;
+      }
       const batch = newPRs.slice(i, i + concurrency);
+      for (const { owner, repo, pr } of batch) {
+        state.markPRReviewing(owner, repo, pr.number);
+      }
       const batchResults = await Promise.all(
         batch.map(({ pr, owner, repo }) =>
           triggerReview(pr).then(outcome => ({ owner, repo, pr, outcome }))
@@ -132,7 +153,11 @@ async function pollAssignedPRs(): Promise<void> {
   }
 }
 
-async function pollReviewCommentReplies(): Promise<void> {
+async function pollReviewCommentReplies(shouldStop: ShouldStop = () => false): Promise<void> {
+  if (shouldStop()) {
+    logger.info('[comment-reply-monitor] Draining; skipping reply-monitor poll');
+    return;
+  }
   if (!config.replyMonitorEnabled) {
     logger.debug('[comment-reply-monitor] Disabled by REPLY_MONITOR_ENABLED=false');
     return;
@@ -151,6 +176,10 @@ async function pollReviewCommentReplies(): Promise<void> {
 
   logger.info(`[comment-reply-monitor] Checking review-comment replies on ${prs.length} reviewed PR(s)`);
   for (const pr of prs) {
+    if (shouldStop()) {
+      logger.info('[comment-reply-monitor] Draining; leaving remaining reply checks for the next process');
+      return;
+    }
     try {
       const comments = await listReviewComments(pr.owner, pr.repo, pr.prNumber);
       const result = await processReviewCommentReplies({
@@ -162,6 +191,7 @@ async function pollReviewCommentReplies(): Promise<void> {
         minReplyCreatedAt,
         isCommentReplied: (commentId) => state.isCommentReplied(commentId),
         markCommentReplied: (commentId) => state.markCommentReplied(commentId),
+        getPRHeadSha,
         judgeAndDraftReply,
         postReviewCommentReply,
         notifyReviewCommentReply: (event) => sendDiscordNotification('review_comment_reply', {
@@ -217,7 +247,7 @@ async function triggerReview(pr: GitHubPRItem): Promise<RetryOutcome> {
   return outcome;
 }
 
-function startPolling(intervalMinutes = 5): void {
+function startPolling(intervalMinutes = 5): PollingController {
   // Prune old completed entries so the state file does not grow unbounded.
   try {
     getSharedState().pruneOldEntries(config.stateRetentionDays * 24 * 60 * 60 * 1000);
@@ -232,12 +262,33 @@ function startPolling(intervalMinutes = 5): void {
   }
 
   logger.info(`[POLLER] Starting cron job: every ${intervalMinutes} minutes`);
-  const tick = async (): Promise<void> => {
-    await pollAssignedPRs();
-    await pollReviewCommentReplies();
+  const shutdown = new GracefulShutdown();
+  const tick = (): void => {
+    const task = shutdown.run(async () => {
+      const shouldStop = (): boolean => shutdown.isDraining || isReviewDraining();
+      await pollAssignedPRs(shouldStop);
+      if (!shouldStop()) {
+        await pollReviewCommentReplies(shouldStop);
+      }
+    });
+    if (!task) {
+      logger.info('[POLLER] Draining; ignored scheduled poll tick');
+    }
   };
-  cron.schedule(`*/${intervalMinutes} * * * *`, () => { void tick(); });
-  void tick();
+  const cronTask = cron.schedule(`*/${intervalMinutes} * * * *`, tick);
+  tick();
+
+  let stopPromise: Promise<GracefulShutdownResult> | undefined;
+  return {
+    stop(timeoutMs: number): Promise<GracefulShutdownResult> {
+      if (stopPromise) return stopPromise;
+      shutdown.beginDrain();
+      cronTask.stop();
+      logger.info(`[POLLER] Draining ${shutdown.activeCount} active poll tick(s)`);
+      stopPromise = shutdown.waitForIdle(timeoutMs);
+      return stopPromise;
+    },
+  };
 }
 
 export {

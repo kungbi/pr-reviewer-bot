@@ -2,6 +2,16 @@
 
 PR Reviewer Bot 운영 중 자주 보는 문제와 확인 절차입니다.
 
+## 재시작이 바로 끝나지 않음
+
+SIGTERM/SIGINT를 받으면 새 review/reply 작업을 차단하고, 이미 시작한 리뷰를 마무리한 뒤 종료합니다. 기본 grace time은 `REVIEW_TIMEOUT_MIN × 3 + 5`분입니다.
+
+```bash
+npx pm2 logs pr-reviewer-bot --lines 200
+```
+
+`Draining` 로그와 `Graceful shutdown complete` 로그를 확인합니다. grace time을 넘기면 오류 종료하며, PM2의 4시간 `kill_timeout`이 최종 강제 종료 상한입니다.
+
 ## Discord에 “리뷰 실패”가 반복해서 뜸
 
 대부분 review agent CLI 실행 실패, 환경 변수 불일치, 또는 PM2 재시작 누락입니다.

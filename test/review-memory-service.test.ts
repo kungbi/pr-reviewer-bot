@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { archiveAndMaybeLearnFromThread } from '../src/review-memory/review-memory-service';
+import { archiveAndMaybeLearnFromThread, getReviewMemoryContext } from '../src/review-memory/review-memory-service';
 import { ReviewMemoryStore } from '../src/review-memory/review-memory-store';
 import { ReviewComment } from '../src/types';
 
@@ -107,5 +107,51 @@ describe('archiveAndMaybeLearnFromThread', () => {
     expect(classify).not.toHaveBeenCalled();
     expect(Object.keys(store.data.threads)).toHaveLength(0);
     expect(Object.keys(store.data.lessons)).toHaveLength(0);
+  });
+
+  it('keeps the GitHub-backed organization wiki separate from repository lessons', () => {
+    store.upsertLesson({
+      id: 'owner/repo:project_convention:repo-only',
+      owner: 'owner',
+      repo: 'repo',
+      status: 'active',
+      category: 'project_convention',
+      confidence: 0.9,
+      title: 'Repository boundary',
+      lesson: 'This applies only to this repository.',
+      whenToApply: ['repository-specific flows'],
+      doNotApply: [],
+      source: {
+        owner: 'owner', repo: 'repo', prNumber: 1, parentCommentId: 100, humanReplyId: 101,
+        createdAt: '2026-07-03T00:00:00.000Z',
+      },
+      createdAt: '2026-07-03T00:00:00.000Z',
+      updatedAt: '2026-07-03T00:00:00.000Z',
+    });
+    const wikiDirectory = path.join(dir, 'review-wiki');
+    const wikiPath = path.join(wikiDirectory, 'owner.md');
+    fs.mkdirSync(wikiDirectory, { recursive: true });
+    fs.writeFileSync(wikiPath, `---
+owner: owner
+---
+# Shared API contracts
+
+Check direct consumers when shared API contracts change.
+`);
+
+    const context = getReviewMemoryContext({
+      owner: 'owner',
+      repo: 'repo',
+      store,
+      limit: 8,
+      wikiDirectory,
+    });
+
+    expect(context.lessons.map((lesson) => lesson.id)).toEqual(['owner/repo:project_convention:repo-only']);
+    expect(context.organizationWiki).toEqual({
+      owner: 'owner',
+      sourcePath: wikiPath,
+      content: '# Shared API contracts\n\nCheck direct consumers when shared API contracts change.',
+    });
   });
 });

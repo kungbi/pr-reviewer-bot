@@ -22,13 +22,15 @@ import { getReviewSeveritySummary, getReviewVerdict, ReviewDraft } from './revie
 import { publishVerifiedDraft } from './review-publisher';
 import { runReviewVerificationGate } from './review-verification-gate';
 import ReviewedPRsState, { getSharedState } from '../utils/state-manager';
+import { GracefulShutdown, GracefulShutdownResult } from '../utils/graceful-shutdown';
 import logger from '../utils/logger';
 import config from '../utils/config';
 import { ReviewResult, ReviewVerdict, PRStatus } from '../types';
 
 const inFlightReviews = new Set<string>();
+const reviewShutdown = new GracefulShutdown();
 
-async function executeReview(
+async function executeReviewInternal(
   owner: string,
   repo: string,
   prNumber: number,
@@ -127,8 +129,12 @@ async function executeReview(
       let reviewMemory;
       try {
         reviewMemory = getReviewMemoryContext({ owner, repo, limit: config.reviewMemoryMaxLessons });
-        if (reviewMemory.lessons.length > 0) {
-          logger.info(`[review-memory] Injecting ${reviewMemory.lessons.length} lesson(s) for ${owner}/${repo}#${prNumber}`);
+        const repoLessonCount = reviewMemory.lessons.length;
+        const wikiSource = reviewMemory.organizationWiki?.sourcePath;
+        if (repoLessonCount > 0 || wikiSource) {
+          logger.info(
+            `[review-memory] Injecting repo=${repoLessonCount} lesson(s), organizationWiki=${wikiSource ?? 'none'} for ${owner}/${repo}#${prNumber}`,
+          );
         }
       } catch (err) {
         logger.warn(`[review-memory] Failed to load context for ${owner}/${repo}#${prNumber}: ${(err as Error).message}`);
@@ -253,4 +259,30 @@ async function executeReview(
   }
 }
 
-export { executeReview };
+function executeReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  stateOverride?: ReviewedPRsState,
+): Promise<ReviewResult> {
+  const task = reviewShutdown.run(() => executeReviewInternal(owner, repo, prNumber, stateOverride));
+  if (task) return task;
+
+  logger.info(`[review-executor] Draining; refused new review: ${owner}/${repo}#${prNumber}`);
+  return Promise.resolve({ success: true, verdict: 'already_reviewed', commentPosted: false });
+}
+
+function beginReviewDrain(): void {
+  reviewShutdown.beginDrain();
+  logger.info(`[review-executor] Draining ${reviewShutdown.activeCount} active review(s)`);
+}
+
+function isReviewDraining(): boolean {
+  return reviewShutdown.isDraining;
+}
+
+function waitForReviewDrain(timeoutMs: number): Promise<GracefulShutdownResult> {
+  return reviewShutdown.waitForIdle(timeoutMs);
+}
+
+export { beginReviewDrain, executeReview, isReviewDraining, waitForReviewDrain };

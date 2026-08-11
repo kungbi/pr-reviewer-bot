@@ -76,6 +76,7 @@ npx pm2 logs pr-reviewer-bot --lines 200
 | `REVIEW_MODEL` | 선택 | `opus` | Claude model alias |
 | `OPENCODE_MODEL` | 선택 | agent 기본값 | OpenCode provider/model |
 | `REVIEW_TIMEOUT_MIN` | 선택 | `50` | PR 하나당 agent timeout |
+| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 선택 | `REVIEW_TIMEOUT_MIN × 3 + 5` | SIGTERM/SIGINT 뒤 새 작업을 막고 진행 중 review/reply를 drain할 최대 시간 |
 | `REVIEW_CONCURRENCY` | 선택 | `3` | 동시 리뷰 개수 |
 | `STATE_RETENTION_DAYS` | 선택 | `30` | 완료 상태 보관 기간 |
 

@@ -11,6 +11,7 @@ import {
   getSharedReviewMemoryStore,
   ReviewMemoryStore,
 } from './review-memory-store';
+import { loadOrganizationReviewWiki } from './organization-review-wiki';
 import {
   classifyReviewThread,
   ClassifyReviewThreadInput,
@@ -147,6 +148,7 @@ export function getReviewMemoryContext(input: {
   repo: string;
   pathHints?: string[];
   limit?: number;
+  wikiDirectory?: string;
   store?: ReviewMemoryStore;
 }): ReviewMemoryContext {
   if (!config.reviewMemoryEnabled) return { lessons: [] };
@@ -157,6 +159,10 @@ export function getReviewMemoryContext(input: {
       repo: input.repo,
       pathHints: input.pathHints,
       limit: input.limit ?? config.reviewMemoryMaxLessons,
+    }),
+    organizationWiki: loadOrganizationReviewWiki({
+      owner: input.owner,
+      wikiDirectory: input.wikiDirectory,
     }),
   };
 }

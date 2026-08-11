@@ -17,6 +17,25 @@ interface SpawnOptions {
 // Extra grace after the soft timeout before force-killing with SIGKILL.
 const KILL_GRACE_MS = 30_000;
 
+const LOCAL_GITHUB_CREDENTIAL_ENV_NAMES = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'GITHUB_PAT',
+  'GH_ENTERPRISE_TOKEN',
+] as const;
+
+/**
+ * The review publisher owns local GitHub write credentials. Analysis agents
+ * must use only the authentication available in their own configured profile.
+ */
+export function buildReviewAgentEnvironment(parentEnvironment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const childEnvironment = { ...parentEnvironment };
+  for (const name of LOCAL_GITHUB_CREDENTIAL_ENV_NAMES) {
+    delete childEnvironment[name];
+  }
+  return childEnvironment;
+}
+
 export async function sessions_spawn(prompt: string, options?: SpawnOptions): Promise<string> {
   const { command, args, promptViaStdin } = buildAgentInvocation(
     prompt,
@@ -34,7 +53,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: timeoutMs,
       env: {
-        ...process.env,
+        ...buildReviewAgentEnvironment(process.env),
         PATH: buildAgentSpawnPath(process.env.PATH, process.env.HOME),
       },
     };

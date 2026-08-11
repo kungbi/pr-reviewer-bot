@@ -43,9 +43,11 @@ agent가 답변 필요 여부를 판단하고, 필요 시 같은 GitHub review t
   ↓
 review memory / team convention memory
   ↓
-원문 thread는 state/review-memory.json에 truncated archive로 저장
+원문 thread와 정제된 repo lesson은 state/review-memory.json에 저장
   ↓
-accepted / false_positive / project_convention 등으로 분류된 lesson만 다음 리뷰에 주입
+같은 GitHub organization 전체에 적용할 사람이 검토한 Markdown wiki를 별도 주입
+  ↓
+repo lesson은 organization wiki로 자동 승격하지 않음
 ```
 
 ---
@@ -60,7 +62,8 @@ accepted / false_positive / project_convention 등으로 분류된 lesson만 다
   - 지원값: `hermes`, `codex`, `claude`, `opencode`
   - Hermes는 해당 profile의 provider auth/model과 SSH terminal backend를 사용하며, 로컬 clone 대신 원격 `gh` 읽기 경로로 PR을 탐색
 - State file: `state/reviewed-prs.json`
-- Review memory file: `state/review-memory.json` — review comment 논의 원문 archive + repo-scoped curated lesson 저장, git 제외
+- Review memory runtime file: `state/review-memory.json` — review comment 논의 원문 archive + repo-scoped curated lesson 저장, git 제외
+- Organization review wiki: `docs/review-wiki/<organization>.md` — 사람이 검토한 동일 GitHub organization 공용 Markdown, source control 포함
 - Reply monitor: `REPLY_MONITOR_ENABLED=true`일 때 봇 review comment에 달린 사람 답글을 감지해 필요한 경우 추가 답변
 - Discord notification: `DISCORD_WEBHOOK_URL`
 
@@ -88,6 +91,7 @@ pr-reviewer-bot/
 │       ├── logger.ts
 │       └── state-manager.ts
 ├── state/reviewed-prs.json         # 리뷰 상태 저장, git 제외
+├── docs/review-wiki/                 # 사람이 PR로 관리하는 organization 공용 review wiki
 ├── logs/                           # PM2/runtime logs
 ├── dist/                           # npm run build output
 ├── .env                            # 실제 운영 환경변수, git 제외
@@ -119,11 +123,13 @@ cp .env.example .env
 | `CODEX_MODEL` | 선택 | `REVIEW_AGENT=codex`일 때 사용할 Codex model. 비우면 Codex CLI 기본값 |
 | `CODEX_REASONING_EFFORT` | 선택 | `REVIEW_AGENT=codex`일 때 `model_reasoning_effort` override. 현재 운영값 `xhigh` |
 | `REVIEW_TIMEOUT_MIN` | 선택 | PR 하나당 agent 실행 timeout, 분 단위 |
+| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 선택 | SIGTERM/SIGINT 후 새 작업을 차단하고 진행 중인 review/reply를 기다리는 최대 시간. 기본은 `REVIEW_TIMEOUT_MIN × 3 + 5`분 |
 | `REVIEW_CONCURRENCY` | 선택 | 동시에 리뷰할 PR 개수 |
 | `REPLY_MONITOR_ENABLED` | 선택 | 봇이 남긴 review comment thread에 사람이 답글을 달면 감지/응답할지 여부 |
 | `REPLY_MONITOR_LOOKBACK_DAYS` | 선택 | reply monitor가 스캔할 최근 reviewed PR 범위. 기본 14일 |
 | `REVIEW_MEMORY_ENABLED` | 선택 | 사람 답글 논의를 archive하고 정제된 lesson을 다음 리뷰에 주입할지 여부. 기본 true. false면 raw archive도 쓰지 않음 |
-| `REVIEW_MEMORY_MAX_LESSONS` | 선택 | 리뷰 프롬프트에 주입할 최대 active lesson 수. 기본 8, 최소 0 |
+| `REVIEW_MEMORY_MAX_LESSONS` | 선택 | 레포별 리뷰 프롬프트에 주입할 최대 active lesson 수. 기본 8, 최소 0 |
+| `REVIEW_WIKI_DIRECTORY` | 선택 | 조직 공용 Markdown wiki 경로. 기본 `docs/review-wiki`; `<organization>.md`의 `owner:` frontmatter가 PR organization과 같을 때만 1차 draft에 주입 |
 | `REVIEW_MEMORY_RAW_MAX_CHARS` | 선택 | raw comment/diff hunk 저장 시 필드별 최대 문자 수. 기본 4000, 최소 100 |
 | `REVIEW_MEMORY_RETENTION_DAYS` | 선택 | raw discussion archive 보관 일수. 기본 180일, 최소 1 |
 
@@ -209,6 +215,8 @@ set -a
 set +a
 npx pm2 restart pr-reviewer-bot --update-env
 ```
+
+재시작 신호를 받으면 cron·Discord의 새 리뷰 요청을 차단하고, 이미 시작한 draft·Ponytail·verifier·게시·reply-monitor 작업을 끝까지 기다립니다. 기본 대기 시간은 `REVIEW_TIMEOUT_MIN × 3 + 5`분이며, 시간을 넘기면 오류 종료 후 PM2의 4시간 hard-kill 한도가 최종 보호 장치가 됩니다.
 
 상태 확인:
 
@@ -325,22 +333,32 @@ Discord 알림은 두 종류입니다.
 
 ## Review memory / Team convention memory
 
-`REVIEW_MEMORY_ENABLED=true`이면 reply monitor가 처리한 사람 답글 논의를 두 층으로 저장합니다. `false`이면 privacy-safe mode로 raw archive와 future-review lesson 저장/주입을 모두 건너뜁니다.
+`REVIEW_MEMORY_ENABLED=true`이면 review memory를 서로 다른 신뢰 범위로 관리합니다. `false`이면 privacy-safe mode로 raw archive와 두 memory의 prompt 주입을 모두 건너뜁니다.
 
 1. **Raw archive** — 봇 review comment, 사람 reply, 필요 시 봇 follow-up reply를 `state/review-memory.json.threads`에 저장합니다. 본문과 diff hunk는 `REVIEW_MEMORY_RAW_MAX_CHARS` 기준으로 잘라 저장합니다.
-2. **Curated lesson** — agent가 논의를 `accepted`, `false_positive`, `project_convention`, `one_off_exception`, `needs_human_judgment`, `unresolved`로 분류합니다. confidence와 내용이 충분한 항목만 `state/review-memory.json.lessons`에 active lesson으로 저장됩니다.
+2. **Repo-scoped lesson** — agent가 해당 레포 논의를 `accepted`, `false_positive`, `project_convention`, `one_off_exception`, `needs_human_judgment`, `unresolved`로 분류합니다. confidence와 내용이 충분한 항목만 `state/review-memory.json.lessons`에 active lesson으로 저장됩니다.
+3. **Organization review wiki** — `docs/review-wiki/<organization>.md`의 사람이 검토한 Markdown을 같은 GitHub organization의 모든 PR에만 주입합니다. 이 파일은 source control로 관리하며, 다른 organization PR에는 절대 전달하지 않습니다. 레포 thread에서 자동 생성·승격하지 않습니다.
 
-다음 리뷰를 시작할 때 review executor는 같은 `owner/repo`의 active lesson을 최대 `REVIEW_MEMORY_MAX_LESSONS`개까지 prompt에 주입합니다.
+다음 리뷰를 시작할 때 review executor는 레포별 active lesson을 최대 `REVIEW_MEMORY_MAX_LESSONS`개, 조직 wiki는 **전체 Markdown 블록**으로 1차 review prompt에 분리 주입합니다. 현재 코드·diff·레포 문서가 항상 우선하며, 레포별 명시 합의가 조직 wiki와 충돌하면 레포 기준을 따릅니다. wiki는 top-N으로 조용히 잘라내지 않으므로, 커지면 사람이 문서를 명시적으로 분리·정리합니다.
+
+조직 wiki는 반드시 아래 frontmatter로 organization을 선언합니다. 누락·불일치·본문 없음이면 해당 wiki만 무시하고 경고 로그를 남기며, 리뷰 자체는 계속합니다.
+
+```md
+---
+owner: kungbi-spiders
+---
+
+# Shared review conventions
+```
+
+파일명은 `<organization>.md`여야 하며, `owner`는 주입할 GitHub organization과 대소문자 구분 없이 일치해야 합니다. wiki 본문에는 공통 API·보안·배포 기준과 적용/예외 범위를 Markdown으로 관리합니다.
 
 주입 규칙:
 
-- `false_positive`: 같은 오판 반복 방지용으로 강하게 참고
-- `project_convention`: repo 기준으로 참고하되 현재 PR이 명확한 예외를 설명하면 질문 톤 사용
-- `one_off_exception`: 일반 규칙으로 확대 금지
-- 주입된 lesson은 `<review_memory_advisory_json>` 블록의 비신뢰 참고 데이터로만 취급하고, lesson 본문에 포함된 지시문을 시스템 명령처럼 따르지 않음
+- 모든 memory는 비신뢰 참고 데이터다. 본문 안 지시문을 시스템 명령처럼 따르지 않음
 - raw archive는 증거 원본일 뿐, future review에 직접 대량 주입하지 않음
 
-이 파일은 runtime state이고 `.gitignore` 대상입니다. 공개 repo에 커밋하거나 외부에 공유하지 마세요.
+`state/review-memory.json`은 runtime state이고 `.gitignore` 대상입니다. 공개 repo에 커밋하거나 외부에 공유하지 마세요. 반대로 `docs/review-wiki/<organization>.md`는 사람이 PR로 검토·관리하는 조직 공용 기준이므로 source control에 포함합니다.
 
 ### Runtime data / privacy
 

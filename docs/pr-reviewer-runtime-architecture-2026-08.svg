@@ -1,0 +1,242 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2096 1415" role="img" aria-labelledby="title desc">
+    <title id="title">PR Reviewer Bot detailed runtime architecture</title>
+    <desc id="desc">A detailed diagram showing GitHub and Discord triggers, PM2 Node runtime, state and review-memory files, three independent Hermes review sessions through a work SSH backend, strict JSON verification, a local GitHub-only publisher, and the disabled reply-monitor path.</desc>
+    <defs>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 L0 0 0 40" fill="none" stroke="#1e293b" stroke-width=".55"/></pattern>
+      <marker id="cyan" markerWidth="11" markerHeight="11" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L9,3.5 z" fill="#22d3ee"/></marker>
+      <marker id="green" markerWidth="11" markerHeight="11" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L9,3.5 z" fill="#34d399"/></marker>
+      <marker id="amber" markerWidth="11" markerHeight="11" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L9,3.5 z" fill="#fbbf24"/></marker>
+      <marker id="rose" markerWidth="11" markerHeight="11" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L9,3.5 z" fill="#fb7185"/></marker>
+      <marker id="slate" markerWidth="11" markerHeight="11" refX="9" refY="3.5" orient="auto"><path d="M0,0 L0,7 L9,3.5 z" fill="#94a3b8"/></marker>
+      <style>
+        .title{font:700 16px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;fill:#f1f5f9}.label{font:700 13px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;fill:#e2e8f0}.sub{font:12px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;fill:#b5c3d7}.tiny{font:10.5px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;fill:#94a3b8}.mono{font:10.5px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#a5b4c8}.tag{font:700 10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.05em}.boundary{fill:none;stroke-width:1.4;stroke-dasharray:8 5}.box{stroke-width:1.45}.flow{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.caption{font:10px -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",sans-serif;fill:#cbd5e1}.smallcap{font:9px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#64748b}
+      </style>
+    </defs>
+    <rect width="2096" height="1415" fill="#07101f"/>
+    <rect width="2096" height="1415" fill="url(#grid)" opacity=".72"/>
+
+    <!-- flows: rendered before nodes -->
+    <path d="M282 295 H370" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M282 504 H370" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M585 337 V388" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M585 496 V548" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M850 496 V548" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M1115 496 V548" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M1370 496 V548" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M1450 679 H1588" class="flow" stroke="#22d3ee" marker-end="url(#cyan)"/>
+    <path d="M1588 752 H1450" class="flow" stroke="#34d399" marker-end="url(#green)"/>
+    <path d="M1590 658 H1530 V258 H282" class="flow" stroke="#fbbf24" stroke-dasharray="7 5" marker-end="url(#amber)"/>
+    <path d="M815 702 V771" class="flow" stroke="#34d399" marker-end="url(#green)"/>
+    <path d="M815 857 V920" class="flow" stroke="#34d399" marker-end="url(#green)"/>
+    <path d="M1140 1112 H1166 V1007 H1194" class="flow" stroke="#34d399" marker-end="url(#green)"/>
+    <path d="M1408 995 H1560 V307 H282" class="flow" stroke="#fb7185" stroke-dasharray="7 5" marker-end="url(#rose)"/>
+    <path d="M1408 1160 H1510 V496 H282" class="flow" stroke="#94a3b8" stroke-dasharray="5 5" marker-end="url(#slate)"/>
+    <path d="M1301 1095 V1120" class="flow" stroke="#34d399" marker-end="url(#green)"/>
+    <path d="M1301 1200 V1210 H550" class="flow" stroke="#34d399" marker-end="url(#green)"/>
+    <path d="M1408 1259 H1510 V500 H282" class="flow" stroke="#22d3ee" stroke-dasharray="5 5" marker-end="url(#cyan)"/>
+
+    <!-- boundaries -->
+    <rect x="34" y="102" width="248" height="490" rx="18" class="boundary" stroke="#94a3b8" opacity=".75"/>
+    <text x="56" y="130" class="tag" fill="#cbd5e1">EXTERNAL SYSTEMS</text>
+    <rect x="330" y="102" width="1120" height="1210" rx="20" class="boundary" stroke="#22d3ee" opacity=".67"/>
+    <text x="354" y="130" class="tag" fill="#67e8f9">LOCAL MAC · /Users/woongbishin/pr-reviewer-bot · NODE / PM2</text>
+    <rect x="1548" y="102" width="510" height="770" rx="20" class="boundary" stroke="#fbbf24" opacity=".8"/>
+    <text x="1572" y="130" class="tag" fill="#fcd34d">HERMES WORK PROFILE · REMOTE READ PLANE</text>
+
+    <!-- external -->
+    <g transform="translate(58 202)">
+      <rect width="198" height="135" rx="12" fill="#101b2c" class="box" stroke="#94a3b8"/>
+      <circle cx="26" cy="29" r="11" fill="#e5e7eb"/><path d="M19 29h14" stroke="#0f172a" stroke-width="2.4"/>
+      <text x="47" y="34" class="title">GitHub API / PR</text>
+      <text x="20" y="66" class="sub">review-requested 검색</text>
+      <text x="20" y="87" class="sub">PR · diff · comments · HEAD</text>
+      <text x="20" y="111" class="mono">GET source / POST sink</text>
+    </g>
+    <g transform="translate(58 420)">
+      <rect width="198" height="128" rx="12" fill="#101b2c" class="box" stroke="#94a3b8"/>
+      <circle cx="26" cy="29" r="11" fill="#5865f2"/>
+      <text x="47" y="34" class="title">Discord</text>
+      <text x="20" y="66" class="sub">PR URL 수동 트리거</text>
+      <text x="20" y="87" class="sub">시작 · 완료 · 실패 알림</text>
+      <text x="20" y="109" class="mono">BOT + WEBHOOK</text>
+    </g>
+
+    <!-- local boot/runtime -->
+    <g transform="translate(370 174)">
+      <rect width="1038" height="163" rx="12" fill="#063b4f" opacity=".92"/>
+      <rect width="1038" height="163" rx="12" fill="rgba(8,51,68,.31)" class="box" stroke="#22d3ee"/>
+      <text x="23" y="34" class="title">① Runtime shell — PM2 `pr-reviewer-bot` → `dist/src/index.js`</text>
+      <text x="23" y="62" class="sub">dotenv config · stale clone cleanup · node-cron 1분 tick · Discord Gateway client</text>
+      <line x1="22" y1="81" x2="1016" y2="81" stroke="#155e75"/>
+      <text x="23" y="109" class="mono">config: REVIEW_AGENT=hermes · HERMES_PROFILE=work · REVIEW_CONCURRENCY=3 · REPLY_MONITOR_ENABLED=false</text>
+      <text x="23" y="133" class="mono">src/index.ts  →  startPolling() + startDiscordBot()</text>
+      <rect x="894" y="21" width="118" height="28" rx="14" fill="#14532d"/><text x="911" y="39" class="tag" fill="#bbf7d0">ONLINE · PID</text>
+    </g>
+
+    <!-- incoming -->
+    <g transform="translate(370 388)">
+      <rect width="430" height="108" rx="11" fill="#063b4f" opacity=".88"/>
+      <rect width="430" height="108" rx="11" fill="rgba(8,51,68,.32)" class="box" stroke="#22d3ee"/>
+      <text x="20" y="31" class="label">Polling trigger</text>
+      <text x="20" y="55" class="sub">GitHub Search API · review-requested</text>
+      <text x="20" y="77" class="mono">pollAssignedPRs() · 1min</text>
+      <text x="20" y="94" class="tiny">HEAD SHA 확인 후 동일 SHA skip</text>
+    </g>
+    <g transform="translate(830 388)">
+      <rect width="430" height="108" rx="11" fill="#063b4f" opacity=".88"/>
+      <rect width="430" height="108" rx="11" fill="rgba(8,51,68,.32)" class="box" stroke="#22d3ee"/>
+      <text x="20" y="31" class="label">Manual trigger</text>
+      <text x="20" y="55" class="sub">Discord message의 GitHub PR URL</text>
+      <text x="20" y="77" class="mono">discord-bot.ts → executeReview()</text>
+      <text x="20" y="94" class="tiny">bot message에는 즉시 시작/결과 회신</text>
+    </g>
+    <g transform="translate(1290 388)">
+      <rect width="118" height="108" rx="11" fill="#1e293b" opacity=".85"/>
+      <rect width="118" height="108" rx="11" fill="rgba(30,41,59,.40)" class="box" stroke="#94a3b8"/>
+      <text x="19" y="32" class="label">Join</text>
+      <text x="19" y="56" class="tiny">same</text><text x="19" y="73" class="tiny">executor</text>
+      <text x="19" y="94" class="tag" fill="#cbd5e1">PR KEY</text>
+    </g>
+
+    <!-- executor -->
+    <g transform="translate(370 548)">
+      <rect width="1038" height="154" rx="12" fill="#064e3b" opacity=".88"/>
+      <rect width="1038" height="154" rx="12" fill="rgba(6,78,59,.28)" class="box" stroke="#34d399"/>
+      <text x="22" y="33" class="title">② Review executor — `executeReview(owner, repo, prNumber)`</text>
+      <text x="22" y="61" class="sub">in-flight Set + persisted reviewing lock · PR detail / current HEAD GET · Discord 시작 알림</text>
+      <line x1="21" y1="80" x2="1017" y2="80" stroke="#166534"/>
+      <text x="22" y="108" class="mono">Hermes mode: `shouldUseLocalClone()` = false → local /tmp clone skip</text>
+      <text x="22" y="132" class="mono">이유: work SSH backend에서는 Mac의 local clone이 보이지 않음; remote `gh` GET로 실제 코드 탐색</text>
+      <rect x="853" y="96" width="161" height="28" rx="6" fill="#14532d"/><text x="867" y="114" class="tag" fill="#bbf7d0">HEAD-SHA BOUND</text>
+    </g>
+
+    <!-- gate mini pipeline -->
+    <g transform="translate(370 771)">
+      <rect width="770" height="86" rx="11" fill="#063b4f" opacity=".9"/>
+      <rect width="770" height="86" rx="11" fill="rgba(8,51,68,.30)" class="box" stroke="#22d3ee"/>
+      <text x="18" y="29" class="label">③A Primary review draft</text>
+      <text x="18" y="52" class="sub">finding / proposal / replies JSON 후보</text>
+      <text x="18" y="71" class="mono">GitHub write 금지 · review memory advisory 주입</text>
+      <rect x="590" y="19" width="156" height="27" rx="6" fill="#164e63"/><text x="607" y="37" class="tag" fill="#a5f3fc">FRESH SESSION #1</text>
+    </g>
+    <g transform="translate(370 920)">
+      <rect width="770" height="82" rx="11" fill="#4a2d0b" opacity=".9"/>
+      <rect width="770" height="82" rx="11" fill="rgba(120,53,15,.27)" class="box" stroke="#fbbf24"/>
+      <text x="18" y="29" class="label">③B Ponytail advisory pass</text>
+      <text x="18" y="52" class="sub">delete / stdlib / native / yagni / shrink — proposal + minor only</text>
+      <text x="18" y="70" class="mono">같은 inline target이면 primary가 우선; unique candidate만 merge</text>
+    </g>
+    <g transform="translate(370 1054)">
+      <rect width="770" height="117" rx="11" fill="#4c1d95" opacity=".83"/>
+      <rect width="770" height="117" rx="11" fill="rgba(76,29,149,.28)" class="box" stroke="#a78bfa"/>
+      <text x="18" y="30" class="label">③C Independent verifier + strict parser</text>
+      <text x="18" y="54" class="sub">candidate를 비신뢰 데이터로 재검증; 확신 없는 항목은 삭제</text>
+      <text x="18" y="78" class="mono">retained inline: target/kind/severity/body/proposal exact · reply: id/severity/body exact</text>
+      <text x="18" y="100" class="mono">new / moved / reclassified / rewritten output → throw → retry, publish 금지</text>
+      <rect x="590" y="19" width="157" height="27" rx="6" fill="#5b21b6"/><text x="607" y="37" class="tag" fill="#ddd6fe">FRESH SESSION #3</text>
+    </g>
+
+    <!-- publisher -->
+    <g transform="translate(1194 920)">
+      <rect width="214" height="175" rx="12" fill="#5a1128" opacity=".9"/>
+      <rect width="214" height="175" rx="12" fill="rgba(136,19,55,.30)" class="box" stroke="#fb7185"/>
+      <text x="18" y="30" class="label">④ Publisher</text>
+      <text x="18" y="54" class="sub">only GitHub writer</text>
+      <line x1="18" y1="70" x2="196" y2="70" stroke="#9f1239"/>
+      <text x="18" y="94" class="tiny">code-derived event</text>
+      <text x="18" y="113" class="tiny">Blocker → REQUEST_CHANGES</text>
+      <text x="18" y="131" class="tiny">Important → COMMENT</text>
+      <text x="18" y="149" class="tiny">Minor/none → APPROVE</text>
+      <text x="18" y="169" class="mono">AI footer enforced</text>
+    </g>
+    <g transform="translate(1194 1120)">
+      <rect width="214" height="80" rx="12" fill="#064e3b" opacity=".88"/>
+      <rect width="214" height="80" rx="12" fill="rgba(6,78,59,.28)" class="box" stroke="#34d399"/>
+      <text x="18" y="26" class="label">⑤ Close the loop</text>
+      <text x="18" y="46" class="tiny">GitHub posting read-back</text>
+      <text x="18" y="62" class="tiny">state update + Discord result</text>
+      <text x="18" y="77" class="mono">failed → retry (max 3)</text>
+    </g>
+
+    <!-- remote plane -->
+    <g transform="translate(1588 184)">
+      <rect width="428" height="113" rx="12" fill="#063b4f" opacity=".9"/>
+      <rect width="428" height="113" rx="12" fill="rgba(8,51,68,.30)" class="box" stroke="#22d3ee"/>
+      <text x="21" y="31" class="title">Hermes CLI launch</text>
+      <text x="21" y="56" class="mono">hermes --profile work chat -Q</text>
+      <text x="21" y="76" class="mono">-t terminal -q &lt;prompt&gt;</text>
+      <text x="21" y="98" class="sub">새 세션 3회 · terminal tool only</text>
+    </g>
+    <g transform="translate(1588 340)">
+      <rect width="428" height="118" rx="12" fill="#4a2d0b" opacity=".92"/>
+      <rect width="428" height="118" rx="12" fill="rgba(120,53,15,.29)" class="box" stroke="#fbbf24"/>
+      <text x="21" y="31" class="title">work profile policy / auth</text>
+      <text x="21" y="56" class="sub">provider auth · model routing · SSH backend</text>
+      <text x="21" y="79" class="mono">profile owns agent auth, not bot .env</text>
+      <text x="21" y="101" class="tiny">local GH_TOKEN / GITHUB_TOKEN / PAT are stripped before spawn</text>
+    </g>
+    <g transform="translate(1588 510)">
+      <rect width="428" height="146" rx="12" fill="#4a2d0b" opacity=".92"/>
+      <rect width="428" height="146" rx="12" fill="rgba(120,53,15,.29)" class="box" stroke="#fbbf24"/>
+      <text x="21" y="31" class="title">SSH terminal backend · work host</text>
+      <text x="21" y="56" class="sub">`gh pr view` · `gh pr diff` · `gh api` GET</text>
+      <text x="21" y="79" class="sub">PR diff / source / previous reviews / call-chain inspect</text>
+      <text x="21" y="104" class="mono">prompt: POST · PUT · PATCH · DELETE forbidden</text>
+      <text x="21" y="126" class="tiny">returns text only → local JSON parser / verifier</text>
+    </g>
+    <g transform="translate(1588 712)">
+      <rect width="428" height="112" rx="12" fill="#1e293b" opacity=".88"/>
+      <rect width="428" height="112" rx="12" fill="rgba(30,41,59,.38)" class="box" stroke="#94a3b8"/>
+      <text x="21" y="31" class="label">Trust boundary</text>
+      <text x="21" y="56" class="sub">agent has analysis / read path only</text>
+      <text x="21" y="78" class="sub">GitHub publish API is not passed to Hermes</text>
+      <text x="21" y="99" class="mono">JSON ≠ authority</text>
+    </g>
+
+    <!-- state/data -->
+    <g transform="translate(394 1210)">
+      <rect width="312" height="80" rx="11" fill="#312e81" opacity=".88"/>
+      <rect width="312" height="80" rx="11" fill="rgba(76,29,149,.30)" class="box" stroke="#a78bfa"/>
+      <text x="18" y="29" class="label">State file</text>
+      <text x="18" y="51" class="mono">state/reviewed-prs.json</text>
+      <text x="18" y="72" class="tiny">HEAD · status · retry · replied marker</text>
+    </g>
+    <g transform="translate(746 1210)">
+      <rect width="312" height="80" rx="11" fill="#312e81" opacity=".88"/>
+      <rect width="312" height="80" fill="rgba(76,29,149,.30)" class="box" stroke="#a78bfa"/>
+      <text x="18" y="29" class="label">Review memory</text>
+      <text x="18" y="51" class="mono">state/review-memory.json</text>
+      <text x="18" y="72" class="tiny">thread archive + repo-scoped lessons</text>
+    </g>
+
+    <!-- disabled reply monitor -->
+    <g transform="translate(1088 1210)">
+      <rect width="320" height="98" rx="11" fill="#182231" opacity=".85"/>
+      <rect width="320" height="98" rx="11" fill="rgba(30,41,59,.38)" class="box" stroke="#64748b" stroke-dasharray="6 5"/>
+      <text x="18" y="30" class="label" fill="#cbd5e1">Reply monitor — disabled</text>
+      <text x="18" y="53" class="mono">REPLY_MONITOR_ENABLED=false</text>
+      <text x="18" y="74" class="tiny">human reply → current HEAD → Hermes judge</text>
+      <text x="18" y="91" class="tiny">reply / lesson path is not activated now</text>
+    </g>
+
+    <!-- annotations -->
+    <text x="288" y="275" class="caption">poll read</text>
+    <text x="286" y="485" class="caption">manual PR URL</text>
+    <text x="1465" y="660" class="caption">prompt / candidate JSON</text>
+    <text x="1460" y="742" class="caption">read findings only</text>
+    <text x="840" y="752" class="caption">candidate only</text>
+    <text x="842" y="900" class="caption">merged candidates</text>
+    <text x="688" y="1042" class="caption">strict fail-closed</text>
+    <text x="1418" y="1152" class="caption">status + notification</text>
+    <text x="1495" y="276" class="caption">remote GH GET only</text>
+
+    <!-- legend -->
+    <g transform="translate(55 1360)">
+      <text x="0" y="0" class="tag" fill="#cbd5e1">LEGEND</text>
+      <line x1="91" y1="-4" x2="123" y2="-4" stroke="#22d3ee" stroke-width="2"/><text x="132" y="0" class="tiny">trigger / agent request</text>
+      <line x1="286" y1="-4" x2="318" y2="-4" stroke="#34d399" stroke-width="2"/><text x="327" y="0" class="tiny">verified result / state</text>
+      <line x1="492" y1="-4" x2="524" y2="-4" stroke="#fb7185" stroke-width="2" stroke-dasharray="6 5"/><text x="533" y="0" class="tiny">GitHub write (local only)</text>
+      <line x1="737" y1="-4" x2="769" y2="-4" stroke="#fbbf24" stroke-width="2" stroke-dasharray="6 5"/><text x="778" y="0" class="tiny">remote read / profile route</text>
+      <line x1="1005" y1="-4" x2="1037" y2="-4" stroke="#64748b" stroke-width="2" stroke-dasharray="6 5"/><text x="1046" y="0" class="tiny">disabled / conditional path</text>
+    </g>
+  </svg>

@@ -110,6 +110,15 @@ if (modelMismatch) {
   throw new Error(`[config] ${modelMismatch}`);
 }
 
+const reviewTimeoutMin = optionalInt('REVIEW_TIMEOUT_MIN', 20);
+// The pipeline runs primary, Ponytail, and verifier sequentially. Keep enough
+// room for three agent timeouts plus clone/API cleanup before PM2 hard-kills.
+const shutdownGraceMin = optionalIntAtLeast(
+  'SHUTDOWN_GRACE_TIMEOUT_MIN',
+  reviewTimeoutMin * 3 + 5,
+  1,
+);
+
 const config = {
   // GitHub — token is optional when `gh auth login` is already done
   ghToken: optional('GH_TOKEN', null),
@@ -158,7 +167,10 @@ const config = {
   prCloneTimeoutMs: optionalInt('PR_CLONE_TIMEOUT_MS', 90000),
 
   // Review agent CLI timeout for the review subagent (minutes → ms)
-  reviewTimeoutMs: optionalInt('REVIEW_TIMEOUT_MIN', 20) * 60 * 1000,
+  reviewTimeoutMs: reviewTimeoutMin * 60 * 1000,
+
+  // Grace period to finish in-flight review/reply work after SIGTERM/SIGINT.
+  shutdownGraceMs: shutdownGraceMin * 60 * 1000,
 
   // Which agent process is spawned for review (claude | opencode | codex | hermes)
   reviewAgent,
@@ -213,6 +225,7 @@ if (process.env.NODE_ENV !== 'test') {
   }
   console.log(`  REVIEW_REASONING    : ${config.reviewAgent === 'codex' ? (config.codexReasoningEffort ?? '(codex default)') : '(n/a)'}`);
   console.log(`  REVIEW_CONCURRENCY  : ${config.reviewConcurrency}`);
+  console.log(`  SHUTDOWN_GRACE      : ${config.shutdownGraceMs / 60_000}min`);
   console.log(`  REPLY_MONITOR       : ${config.replyMonitorEnabled}`);
   console.log(`  REPLY_LOOKBACK_DAYS : ${config.replyMonitorLookbackDays}`);
   console.log(`  REVIEW_MEMORY       : ${config.reviewMemoryEnabled}`);

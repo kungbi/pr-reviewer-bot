@@ -68,8 +68,15 @@ export interface ReviewMemoryFile {
   lessons: Record<string, ReviewLesson>;
 }
 
+export interface OrganizationReviewWiki {
+  owner: string;
+  sourcePath: string;
+  content: string;
+}
+
 export interface ReviewMemoryContext {
   lessons: ReviewLesson[];
+  organizationWiki?: OrganizationReviewWiki;
 }
 
 export interface ReviewMemoryQuery {
