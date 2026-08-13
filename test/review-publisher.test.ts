@@ -49,9 +49,12 @@ describe('publishVerifiedDraft', () => {
     );
   });
 
-  it('posts a non-approval review when an Important finding is attached to an existing thread', async () => {
+  it('links existing-thread replies from the final review summary', async () => {
     const postInlineReview = jest.fn().mockResolvedValue({ id: 1 });
-    const postReviewCommentReply = jest.fn().mockResolvedValue({ id: 2 });
+    const postReviewCommentReply = jest.fn().mockResolvedValue({
+      id: 2,
+      html_url: 'https://github.com/org/repo/pull/123#discussion_r2',
+    });
     const replyOnlyDraft: ReviewDraft = {
       summary: '기존 스레드에 인증 경로 500 이슈를 추가했습니다.',
       comments: [],
@@ -69,7 +72,9 @@ describe('publishVerifiedDraft', () => {
 
     expect(postInlineReview).toHaveBeenCalledWith(
       'org', 'repo', 123, 'abc123',
-      expect.stringContaining('🟡 **Important 1건**'),
+      expect.stringMatching(
+        /🟡 \*\*Important 1건\*\*[\s\S]*기존 스레드 답글 1건[\s\S]*\[답글 1 보기\]\(https:\/\/github\.com\/org\/repo\/pull\/123#discussion_r2\)[\s\S]*PR Reviewer Bot\(AI\)/,
+      ),
       'COMMENT',
       [],
     );
