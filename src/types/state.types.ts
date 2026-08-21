@@ -28,6 +28,7 @@ export interface StateFile {
   reviewedPRs: Record<string, PRStateEntry>;
   repliedComments: Record<string, { commentedAt: string }>;
   closedReviewThreads?: Record<string, ReviewThreadClosure>;
+  pendingReviewReplies?: Record<string, ReviewReplyDelivery>;
   replyMonitorStartedAt?: string;
 }
 
@@ -45,8 +46,22 @@ export interface ReviewThreadClosure {
   closedAt: string;
   resolution: ReviewThreadResolution;
   handledCommentId?: string;
+  handledCommentLogin?: string;
   pendingReplyBody?: string;
   pendingHeadSha?: string;
   operationMarker?: string;
   postAttempted?: boolean;
+}
+
+export type ReviewReplyDeliveryResolution = 'pending' | 'delivery_unknown';
+
+export interface ReviewReplyDelivery {
+  createdAt: string;
+  resolution: ReviewReplyDeliveryResolution;
+  humanReplyId: string;
+  parentCommentId: number;
+  pendingReplyBody: string;
+  pendingHeadSha: string;
+  operationMarker: string;
+  postAttempted: boolean;
 }

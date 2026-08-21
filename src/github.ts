@@ -172,7 +172,13 @@ const postReviewCommentReply = async (owner: string, repo: string, prNumber: num
     { body },
     { headers: getHeaders() }
   );
-  checkRateLimit(res.headers as Record<string, string>);
+  const headers = res.headers as Record<string, string>;
+  if (isRateLimited(headers)) {
+    logger.warn(
+      `Review reply POST succeeded but GitHub rate limit is low. Remaining: ${headers['x-ratelimit-remaining']}, ` +
+      `Resets at: ${getRateLimitReset(headers)}`,
+    );
+  }
   return res.data;
 };
 

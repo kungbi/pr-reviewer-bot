@@ -27,6 +27,10 @@ function getReviewThreadKey(owner: string, repo: string, prNumber: number, rootC
   return `${owner}/${repo}#${prNumber}:thread:${rootCommentId}`;
 }
 
+function getReviewReplyDeliveryKey(owner: string, repo: string, prNumber: number, humanReplyId: number): string {
+  return `${owner}/${repo}#${prNumber}:comment:${humanReplyId}`;
+}
+
 export interface PollingController {
   stop(timeoutMs: number): Promise<GracefulShutdownResult>;
 }
@@ -209,9 +213,10 @@ async function pollReviewCommentReplies(shouldStop: ShouldStop = () => false): P
         getReviewThreadClosure: (rootCommentId) => state.getReviewThreadClosure(
           getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
         ),
-        reserveReviewThreadReconsideration: (rootCommentId, commentId, pendingReplyBody, pendingHeadSha, operationMarker) => state.reserveReviewThreadReconsideration(
+        reserveReviewThreadReconsideration: (rootCommentId, commentId, triggeringLogin, pendingReplyBody, pendingHeadSha, operationMarker) => state.reserveReviewThreadReconsideration(
           getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
           commentId,
+          triggeringLogin,
           pendingReplyBody,
           pendingHeadSha,
           operationMarker,
@@ -227,6 +232,40 @@ async function pollReviewCommentReplies(shouldStop: ShouldStop = () => false): P
         markReviewThreadReconsiderationDeliveryUnknown: (rootCommentId) => {
           state.markReviewThreadReconsiderationDeliveryUnknown(
             getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          );
+        },
+        cancelReviewThreadReconsideration: (rootCommentId) => {
+          state.cancelReviewThreadReconsideration(
+            getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          );
+        },
+        getReviewReplyDelivery: (humanReplyId) => state.getReviewReplyDelivery(
+          getReviewReplyDeliveryKey(pr.owner, pr.repo, pr.prNumber, humanReplyId),
+        ),
+        reserveReviewReplyDelivery: (humanReplyId, parentCommentId, pendingReplyBody, pendingHeadSha, operationMarker) => state.reserveReviewReplyDelivery(
+          getReviewReplyDeliveryKey(pr.owner, pr.repo, pr.prNumber, humanReplyId),
+          humanReplyId,
+          parentCommentId,
+          pendingReplyBody,
+          pendingHeadSha,
+          operationMarker,
+        ),
+        markReviewReplyDeliveryPostAttempted: (humanReplyId) => state.markReviewReplyDeliveryPostAttempted(
+          getReviewReplyDeliveryKey(pr.owner, pr.repo, pr.prNumber, humanReplyId),
+        ),
+        completeReviewReplyDelivery: (humanReplyId) => {
+          state.completeReviewReplyDelivery(
+            getReviewReplyDeliveryKey(pr.owner, pr.repo, pr.prNumber, humanReplyId),
+          );
+        },
+        markReviewReplyDeliveryUnknown: (humanReplyId) => {
+          state.markReviewReplyDeliveryUnknown(
+            getReviewReplyDeliveryKey(pr.owner, pr.repo, pr.prNumber, humanReplyId),
+          );
+        },
+        cancelReviewReplyDelivery: (humanReplyId) => {
+          state.cancelReviewReplyDelivery(
+            getReviewReplyDeliveryKey(pr.owner, pr.repo, pr.prNumber, humanReplyId),
           );
         },
         getRepositoryPermission,

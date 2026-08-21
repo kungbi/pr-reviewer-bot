@@ -14,6 +14,18 @@ describe('processReviewCommentReplies', () => {
     prNumber: 601,
     botLogin,
     getPRHeadSha: jest.fn().mockResolvedValue('current-head-sha'),
+    getReviewReplyDelivery: () => undefined,
+    reserveReviewReplyDelivery: () => true,
+    markReviewReplyDeliveryPostAttempted: () => true,
+    completeReviewReplyDelivery: () => undefined,
+    markReviewReplyDeliveryUnknown: () => undefined,
+    getRepositoryPermission: async () => 'maintain' as const,
+    recordReviewThreadHandoff: () => true,
+    reserveReviewThreadReconsideration: () => true,
+    markReviewThreadReconsiderationPostAttempted: () => true,
+    completeReviewThreadReconsideration: () => undefined,
+    markReviewThreadReconsiderationDeliveryUnknown: () => undefined,
+    cancelReviewThreadReconsideration: () => undefined,
   };
   const verification = {
     headSha: 'current-head-sha',
@@ -112,12 +124,14 @@ describe('processReviewCommentReplies', () => {
     const postReviewCommentReply = jest.fn().mockResolvedValue({ id: 999, html_url: 'https://example.com/bot-reply' });
     const notifyReviewCommentReply = jest.fn().mockResolvedValue(true);
     const expectedBotReplyBody = appendBotAuthorDisclosure('Yes, this is covered by DTO validation.');
+    const expectedDeliveryBody = `${expectedBotReplyBody}\n\n<!-- pr-reviewer-reply:fan-maum/fanmaum-api#601:100:101 -->`;
 
     const result = await processReviewCommentReplies({
       ...baseArgs,
       comments: [parent, humanReply],
       isCommentReplied,
       markCommentReplied,
+      completeReviewReplyDelivery: (commentId: number) => markCommentReplied(commentId),
       judgeAndDraftReply,
       postReviewCommentReply,
       notifyReviewCommentReply,
@@ -127,7 +141,7 @@ describe('processReviewCommentReplies', () => {
       originalBotComment: parent,
       humanReply,
     }));
-    expect(postReviewCommentReply).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 601, 100, expectedBotReplyBody);
+    expect(postReviewCommentReply).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 601, 100, expectedDeliveryBody);
     expect(notifyReviewCommentReply).toHaveBeenCalledTimes(2);
     expect(notifyReviewCommentReply).toHaveBeenNthCalledWith(1, expect.objectContaining({
       action: 'human_replied',
@@ -448,7 +462,7 @@ describe('processReviewCommentReplies', () => {
       body: 'The risk is acknowledged, but this migration keeps Django parity. We will handle it in a follow-up PR.',
     });
     const postReviewCommentReply = jest.fn();
-    const markReviewThreadClosed = jest.fn();
+    const recordReviewThreadHandoff = jest.fn().mockReturnValue(true);
 
     const result = await processReviewCommentReplies({
       ...baseArgs,
@@ -456,7 +470,7 @@ describe('processReviewCommentReplies', () => {
       isCommentReplied: jest.fn().mockReturnValue(false),
       markCommentReplied: jest.fn(),
       isReviewThreadClosed: jest.fn().mockReturnValue(false),
-      markReviewThreadClosed,
+      recordReviewThreadHandoff,
       getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
       judgeAndDraftReply: jest.fn().mockResolvedValue({
         verdict: 'REPLY_NEEDED',
@@ -468,14 +482,14 @@ describe('processReviewCommentReplies', () => {
     } as any);
 
     expect(postReviewCommentReply).not.toHaveBeenCalled();
-    expect(markReviewThreadClosed).toHaveBeenCalledWith(100, 'human_handoff');
+    expect(recordReviewThreadHandoff).toHaveBeenCalledWith(100, 101);
     expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
   });
 
   it('posts one reconsidered merge-boundary concern then closes that review thread', async () => {
     const parent = comment({ id: 100, user: { login: botLogin } });
     const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
-    const markReviewThreadClosed = jest.fn();
+    const completeReviewThreadReconsideration = jest.fn();
     const postReviewCommentReply = jest.fn().mockResolvedValue({ html_url: 'https://example.com/reconsidered' });
 
     await processReviewCommentReplies({
@@ -484,7 +498,7 @@ describe('processReviewCommentReplies', () => {
       isCommentReplied: jest.fn().mockReturnValue(false),
       markCommentReplied: jest.fn(),
       isReviewThreadClosed: jest.fn().mockReturnValue(false),
-      markReviewThreadClosed,
+      completeReviewThreadReconsideration,
       getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
       judgeAndDraftReply: jest.fn().mockResolvedValue({
         verdict: 'REPLY_NEEDED',
@@ -496,7 +510,7 @@ describe('processReviewCommentReplies', () => {
     } as any);
 
     expect(postReviewCommentReply).toHaveBeenCalledTimes(1);
-    expect(markReviewThreadClosed).toHaveBeenCalledWith(100, 'reconsidered_merge_boundary');
+    expect(completeReviewThreadReconsideration).toHaveBeenCalledWith(100);
   });
 
   it('does not reopen a review thread after the single reconsideration', async () => {
@@ -523,7 +537,7 @@ describe('processReviewCommentReplies', () => {
     const parent = comment({ id: 100, user: { login: botLogin } });
     const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
     const markCommentReplied = jest.fn();
-    const markReviewThreadClosed = jest.fn();
+    const completeReviewThreadReconsideration = jest.fn();
 
     const result = await processReviewCommentReplies({
       ...baseArgs,
@@ -531,7 +545,11 @@ describe('processReviewCommentReplies', () => {
       isCommentReplied: jest.fn().mockReturnValue(false),
       markCommentReplied,
       isReviewThreadClosed: jest.fn().mockReturnValue(false),
-      markReviewThreadClosed,
+      reserveReviewThreadReconsideration: jest.fn(() => {
+        markCommentReplied(101);
+        return true;
+      }),
+      completeReviewThreadReconsideration,
       getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
       judgeAndDraftReply: jest.fn().mockResolvedValue({
         verdict: 'REPLY_NEEDED',
@@ -544,7 +562,7 @@ describe('processReviewCommentReplies', () => {
     } as any);
 
     expect(markCommentReplied).toHaveBeenCalledWith(101);
-    expect(markReviewThreadClosed).toHaveBeenCalledWith(100, 'reconsidered_merge_boundary');
+    expect(completeReviewThreadReconsideration).toHaveBeenCalledWith(100);
     expect(result).toEqual({ scanned: 2, candidates: 1, replied: 1, skipped: 0 });
   });
 
@@ -564,6 +582,7 @@ describe('processReviewCommentReplies', () => {
       isReviewThreadClosed: jest.fn().mockReturnValue(true),
       getReviewThreadClosure: jest.fn().mockReturnValue({
         resolution: 'reconsideration_pending',
+        handledCommentLogin: 'maintainer',
         pendingReplyBody,
         pendingHeadSha: 'current-head-sha',
         operationMarker: '<!-- pr-reviewer-reconsideration:marker -->',
@@ -712,6 +731,7 @@ describe('processReviewCommentReplies', () => {
     expect(reserveReviewThreadReconsideration).toHaveBeenCalledWith(
       100,
       101,
+      'maintainer',
       expect.stringContaining('pr-reviewer-reconsideration'),
       'current-head-sha',
       expect.stringContaining('pr-reviewer-reconsideration'),
@@ -734,5 +754,323 @@ describe('processReviewCommentReplies', () => {
     expect(prompt).toContain('HUMAN_HANDOFF');
     expect(prompt).toContain('Do not keep debating after that single response');
     expect(prompt).toContain('direct malformed request');
+  });
+
+  it('revalidates maintainer permission immediately before closing a human-handoff thread', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'former-maintainer' } });
+    const getRepositoryPermission = jest.fn()
+      .mockResolvedValueOnce('maintain')
+      .mockResolvedValueOnce('read');
+    const recordReviewThreadHandoff = jest.fn().mockReturnValue(true);
+    const markCommentReplied = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied,
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      recordReviewThreadHandoff,
+      getRepositoryPermission,
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'NO_REPLY',
+        assessment: 'HUMAN_HANDOFF',
+        verification,
+      }),
+      postReviewCommentReply: jest.fn(),
+    } as any);
+
+    expect(getRepositoryPermission).toHaveBeenCalledTimes(2);
+    expect(recordReviewThreadHandoff).not.toHaveBeenCalled();
+    expect(markCommentReplied).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('does not mark a recovered reconsideration as attempted when the head lookup fails', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const markReviewThreadReconsiderationPostAttempted = jest.fn().mockReturnValue(true);
+    const markReviewThreadReconsiderationDeliveryUnknown = jest.fn();
+    const postReviewCommentReply = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(true),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      getReviewThreadClosure: jest.fn().mockReturnValue({
+        resolution: 'reconsideration_pending',
+        handledCommentLogin: 'maintainer',
+        pendingReplyBody: 'pending body',
+        pendingHeadSha: 'current-head-sha',
+        operationMarker: '<!-- marker -->',
+        postAttempted: false,
+      }),
+      getPRHeadSha: jest.fn().mockRejectedValue(new Error('temporary GitHub failure')),
+      markReviewThreadReconsiderationPostAttempted,
+      markReviewThreadReconsiderationDeliveryUnknown,
+      postReviewCommentReply,
+      judgeAndDraftReply: jest.fn(),
+    } as any);
+
+    expect(markReviewThreadReconsiderationPostAttempted).not.toHaveBeenCalled();
+    expect(markReviewThreadReconsiderationDeliveryUnknown).not.toHaveBeenCalled();
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+  });
+
+  it('durably reserves an ordinary reply before POST and marks an ambiguous delivery without retrying', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const reserveReviewReplyDelivery = jest.fn().mockReturnValue(true);
+    const markReviewReplyDeliveryPostAttempted = jest.fn().mockReturnValue(true);
+    const markReviewReplyDeliveryUnknown = jest.fn();
+    const markCommentReplied = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied,
+      reserveReviewReplyDelivery,
+      markReviewReplyDeliveryPostAttempted,
+      markReviewReplyDeliveryUnknown,
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_REBUTTED',
+        body: 'Verified ordinary reply.',
+        verification,
+      }),
+      postReviewCommentReply: jest.fn().mockRejectedValue(new Error('response lost after POST')),
+    } as any);
+
+    expect(reserveReviewReplyDelivery).toHaveBeenCalledWith(
+      101,
+      100,
+      expect.stringContaining('pr-reviewer-reply'),
+      'current-head-sha',
+      expect.stringContaining('pr-reviewer-reply'),
+    );
+    expect(markReviewReplyDeliveryPostAttempted).toHaveBeenCalledWith(101);
+    expect(markReviewReplyDeliveryUnknown).toHaveBeenCalledWith(101);
+    expect(markCommentReplied).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('reconciles an ambiguous ordinary reply by marker without issuing another POST', async () => {
+    const marker = '<!-- pr-reviewer-reply:marker -->';
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const publishedBotReply = comment({ id: 102, in_reply_to_id: 100, user: { login: botLogin }, body: `posted\n${marker}` });
+    const completeReviewReplyDelivery = jest.fn();
+    const postReviewCommentReply = jest.fn();
+    const judgeAndDraftReply = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply, publishedBotReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      getReviewReplyDelivery: jest.fn().mockReturnValue({
+        resolution: 'delivery_unknown',
+        humanReplyId: '101',
+        parentCommentId: 100,
+        pendingReplyBody: `posted ${marker}`,
+        pendingHeadSha: 'current-head-sha',
+        operationMarker: marker,
+        postAttempted: true,
+      }),
+      completeReviewReplyDelivery,
+      postReviewCommentReply,
+      judgeAndDraftReply,
+    } as any);
+
+    expect(completeReviewReplyDelivery).toHaveBeenCalledWith(101);
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+    expect(judgeAndDraftReply).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a delivery-unknown reconsideration by marker without issuing another POST', async () => {
+    const marker = '<!-- pr-reviewer-reconsideration:marker -->';
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const publishedBotReply = comment({ id: 102, in_reply_to_id: 100, user: { login: botLogin }, body: `posted\n${marker}` });
+    const completeReviewThreadReconsideration = jest.fn();
+    const postReviewCommentReply = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply, publishedBotReply],
+      isCommentReplied: jest.fn().mockReturnValue(true),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      getReviewThreadClosure: jest.fn().mockReturnValue({
+        resolution: 'reconsideration_delivery_unknown',
+        operationMarker: marker,
+        postAttempted: true,
+      }),
+      completeReviewThreadReconsideration,
+      postReviewCommentReply,
+      judgeAndDraftReply: jest.fn(),
+    } as any);
+
+    expect(completeReviewThreadReconsideration).toHaveBeenCalledWith(100);
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+  });
+
+  it('moves an attempted reconsideration without a marker to delivery-unknown without another POST', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const markReviewThreadReconsiderationDeliveryUnknown = jest.fn();
+    const postReviewCommentReply = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(true),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      getReviewThreadClosure: jest.fn().mockReturnValue({
+        resolution: 'reconsideration_pending',
+        operationMarker: '<!-- absent-marker -->',
+        postAttempted: true,
+      }),
+      markReviewThreadReconsiderationDeliveryUnknown,
+      postReviewCommentReply,
+      judgeAndDraftReply: jest.fn(),
+    } as any);
+
+    expect(markReviewThreadReconsiderationDeliveryUnknown).toHaveBeenCalledWith(100);
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the triggering maintainer before a recovered reconsideration POST', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'former-maintainer' } });
+    const getRepositoryPermission = jest.fn().mockResolvedValue('read');
+    const getPRHeadSha = jest.fn().mockResolvedValue('current-head-sha');
+    const cancelReviewThreadReconsideration = jest.fn();
+    const markReviewThreadReconsiderationPostAttempted = jest.fn().mockReturnValue(true);
+    const postReviewCommentReply = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(true),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      getReviewThreadClosure: jest.fn().mockReturnValue({
+        resolution: 'reconsideration_pending',
+        handledCommentId: '101',
+        handledCommentLogin: 'former-maintainer',
+        pendingReplyBody: 'pending body',
+        pendingHeadSha: 'current-head-sha',
+        operationMarker: '<!-- marker -->',
+        postAttempted: false,
+      }),
+      getRepositoryPermission,
+      getPRHeadSha,
+      cancelReviewThreadReconsideration,
+      markReviewThreadReconsiderationPostAttempted,
+      completeReviewThreadReconsideration: jest.fn(),
+      markReviewThreadReconsiderationDeliveryUnknown: jest.fn(),
+      postReviewCommentReply,
+      judgeAndDraftReply: jest.fn(),
+    } as any);
+
+    expect(getRepositoryPermission).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 'former-maintainer');
+    expect(cancelReviewThreadReconsideration).toHaveBeenCalledWith(100);
+    expect(getPRHeadSha).not.toHaveBeenCalled();
+    expect(markReviewThreadReconsiderationPostAttempted).not.toHaveBeenCalled();
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fresh reconsideration POST when durable lifecycle callbacks are missing', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const postReviewCommentReply = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      reserveReviewThreadReconsideration: undefined,
+      markReviewThreadReconsiderationPostAttempted: undefined,
+      completeReviewThreadReconsideration: undefined,
+      markReviewThreadReconsiderationDeliveryUnknown: undefined,
+      getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_STILL_APPLIES',
+        body: 'This boundary still blocks merge.',
+        verification,
+      }),
+      postReviewCommentReply,
+    } as any);
+
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('does not reconcile an ordinary delivery from an exact marker on another thread or an embedded marker', async () => {
+    const marker = '<!-- pr-reviewer-reply:marker -->';
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const embeddedSameThread = comment({ id: 102, in_reply_to_id: 100, user: { login: botLogin }, body: `quoted ${marker}` });
+    const otherParent = comment({ id: 200, user: { login: botLogin } });
+    const exactOtherThread = comment({ id: 201, in_reply_to_id: 200, user: { login: botLogin }, body: `posted\n${marker}` });
+    const completeReviewReplyDelivery = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply, embeddedSameThread, otherParent, exactOtherThread],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      getReviewReplyDelivery: jest.fn().mockReturnValue({
+        resolution: 'delivery_unknown',
+        humanReplyId: '101',
+        parentCommentId: 100,
+        pendingReplyBody: `posted\n${marker}`,
+        pendingHeadSha: 'current-head-sha',
+        operationMarker: marker,
+        postAttempted: true,
+      }),
+      completeReviewReplyDelivery,
+      postReviewCommentReply: jest.fn(),
+      judgeAndDraftReply: jest.fn(),
+    } as any);
+
+    expect(completeReviewReplyDelivery).not.toHaveBeenCalled();
+  });
+
+  it('does not reconcile a reconsideration from an exact marker on another thread or an embedded marker', async () => {
+    const marker = '<!-- pr-reviewer-reconsideration:marker -->';
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const embeddedSameThread = comment({ id: 102, in_reply_to_id: 100, user: { login: botLogin }, body: `quoted ${marker}` });
+    const otherParent = comment({ id: 200, user: { login: botLogin } });
+    const exactOtherThread = comment({ id: 201, in_reply_to_id: 200, user: { login: botLogin }, body: `posted\n${marker}` });
+    const completeReviewThreadReconsideration = jest.fn();
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply, embeddedSameThread, otherParent, exactOtherThread],
+      isCommentReplied: jest.fn().mockReturnValue(true),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      getReviewThreadClosure: jest.fn().mockReturnValue({
+        resolution: 'reconsideration_delivery_unknown',
+        operationMarker: marker,
+        postAttempted: true,
+      }),
+      completeReviewThreadReconsideration,
+      postReviewCommentReply: jest.fn(),
+      judgeAndDraftReply: jest.fn(),
+    } as any);
+
+    expect(completeReviewThreadReconsideration).not.toHaveBeenCalled();
   });
 });

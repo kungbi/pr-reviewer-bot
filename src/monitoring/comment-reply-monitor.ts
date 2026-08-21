@@ -1,6 +1,6 @@
 import logger from '../utils/logger';
 import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
-import { RepositoryPermission, ReviewComment, ReviewThreadClosure } from '../types';
+import { RepositoryPermission, ReviewComment, ReviewReplyDelivery, ReviewThreadClosure } from '../types';
 
 export type ReplyVerdict = 'REPLY_NEEDED' | 'NO_REPLY';
 export type ReplyAssessment =
@@ -60,6 +60,7 @@ interface ProcessReviewCommentRepliesArgs {
   reserveReviewThreadReconsideration?: (
     rootCommentId: number,
     commentId: number,
+    triggeringLogin: string,
     pendingReplyBody: string,
     pendingHeadSha: string,
     operationMarker: string,
@@ -67,6 +68,19 @@ interface ProcessReviewCommentRepliesArgs {
   markReviewThreadReconsiderationPostAttempted?: (rootCommentId: number) => boolean;
   completeReviewThreadReconsideration?: (rootCommentId: number) => void;
   markReviewThreadReconsiderationDeliveryUnknown?: (rootCommentId: number) => void;
+  cancelReviewThreadReconsideration?: (rootCommentId: number) => void;
+  getReviewReplyDelivery?: (humanReplyId: number) => ReviewReplyDelivery | undefined;
+  reserveReviewReplyDelivery?: (
+    humanReplyId: number,
+    parentCommentId: number,
+    pendingReplyBody: string,
+    pendingHeadSha: string,
+    operationMarker: string,
+  ) => boolean;
+  markReviewReplyDeliveryPostAttempted?: (humanReplyId: number) => boolean;
+  completeReviewReplyDelivery?: (humanReplyId: number) => void;
+  markReviewReplyDeliveryUnknown?: (humanReplyId: number) => void;
+  cancelReviewReplyDelivery?: (humanReplyId: number) => void;
   getRepositoryPermission?: (owner: string, repo: string, username: string) => Promise<RepositoryPermission>;
   getPRHeadSha: (owner: string, repo: string, prNumber: number) => Promise<string>;
   judgeAndDraftReply: (input: JudgeReplyInput) => Promise<ReplyDecision>;
@@ -373,6 +387,30 @@ function getReconsiderationOperationMarker(
   return `<!-- pr-reviewer-reconsideration:${args.owner}/${args.repo}#${args.prNumber}:${rootCommentId}:${humanReplyId} -->`;
 }
 
+function getReplyOperationMarker(
+  args: Pick<ProcessReviewCommentRepliesArgs, 'owner' | 'repo' | 'prNumber'>,
+  parentCommentId: number,
+  humanReplyId: number,
+): string {
+  return `<!-- pr-reviewer-reply:${args.owner}/${args.repo}#${args.prNumber}:${parentCommentId}:${humanReplyId} -->`;
+}
+
+function hasExactOperationMarkerInThread(
+  comments: ReviewComment[],
+  byId: Map<number, ReviewComment>,
+  botLogin: string,
+  operationMarker: string,
+  expectedRootCommentId: number,
+): boolean {
+  return comments.some((comment) => {
+    if (comment.user?.login !== botLogin || !comment.in_reply_to_id) return false;
+    const hasExactMarkerLine = comment.body
+      ?.split(/\r?\n/)
+      .some((line) => line.trim() === operationMarker) ?? false;
+    return hasExactMarkerLine && getRootCommentId(byId, comment) === expectedRootCommentId;
+  });
+}
+
 function hasUnverifiedTechnicalAssessment(decision: ReplyDecision, expectedHeadSha: string): boolean {
   return decision.assessment !== 'ACKNOWLEDGEMENT'
     && !hasVerifiedTechnicalAssessment(decision, expectedHeadSha);
@@ -403,49 +441,147 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
     if (!parent || parent.user?.login !== args.botLogin) continue;
 
     const rootCommentId = getRootCommentId(byId, parent);
+    const replyKey = getReplyKey(args, humanReply.id);
     const existingClosure = args.getReviewThreadClosure?.(rootCommentId);
-    if (existingClosure?.resolution === 'reconsideration_pending') {
+    if (existingClosure?.resolution === 'reconsideration_pending'
+      || existingClosure?.resolution === 'reconsideration_delivery_unknown') {
       if (!recoveredPendingThreadKeys.has(rootCommentId)) {
         recoveredPendingThreadKeys.add(rootCommentId);
         const markerAlreadyPosted = Boolean(existingClosure.operationMarker
-          && comments.some((comment) => comment.user?.login === args.botLogin
-            && comment.body?.includes(existingClosure.operationMarker!)));
+          && hasExactOperationMarkerInThread(
+            comments,
+            byId,
+            args.botLogin,
+            existingClosure.operationMarker,
+            rootCommentId,
+          ));
         if (markerAlreadyPosted) {
           args.completeReviewThreadReconsideration?.(rootCommentId);
-        } else if (!existingClosure.postAttempted
-          && existingClosure.pendingReplyBody
-          && existingClosure.pendingHeadSha
-          && args.markReviewThreadReconsiderationPostAttempted?.(rootCommentId)) {
-          try {
-            const currentHeadSha = await args.getPRHeadSha(args.owner, args.repo, args.prNumber);
-            if (currentHeadSha === existingClosure.pendingHeadSha) {
-              await args.postReviewCommentReply(
-                args.owner, args.repo, args.prNumber, rootCommentId, existingClosure.pendingReplyBody,
-              );
-              args.completeReviewThreadReconsideration?.(rootCommentId);
-            } else {
-              args.markReviewThreadReconsiderationDeliveryUnknown?.(rootCommentId);
-            }
-          } catch (err) {
-            logger.warn(
-              `[comment-reply-monitor] Pending reconsideration recovery remains ambiguous for ` +
-              `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}: ${(err as Error).message}`,
-            );
-          }
+        } else if (existingClosure.resolution === 'reconsideration_delivery_unknown') {
+          // At-most-once: keep checking for the marker, but never issue another POST.
         } else if (existingClosure.postAttempted) {
           args.markReviewThreadReconsiderationDeliveryUnknown?.(rootCommentId);
+        } else if (existingClosure.pendingReplyBody && existingClosure.pendingHeadSha) {
+          const triggeringLogin = existingClosure.handledCommentLogin;
+          if (!triggeringLogin
+            || !args.getRepositoryPermission
+            || !args.markReviewThreadReconsiderationPostAttempted
+            || !args.completeReviewThreadReconsideration
+            || !args.markReviewThreadReconsiderationDeliveryUnknown
+            || !args.cancelReviewThreadReconsideration) {
+            logger.error(
+              `[comment-reply-monitor] Recovered reconsideration lacks durable lifecycle or author identity for ` +
+              `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}; refusing unsafe POST`,
+            );
+          } else {
+            let recoveredPermission: RepositoryPermission;
+            try {
+              recoveredPermission = await args.getRepositoryPermission(args.owner, args.repo, triggeringLogin);
+            } catch (err) {
+              logger.warn(
+                `[comment-reply-monitor] Could not revalidate ${triggeringLogin}'s permission for recovered reconsideration ` +
+                `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}; leaving it unattempted: ${(err as Error).message}`,
+              );
+              continue;
+            }
+
+            if (!canCloseThreadForHumanHandoff(recoveredPermission)) {
+              args.cancelReviewThreadReconsideration(rootCommentId);
+              logger.warn(
+                `[comment-reply-monitor] Cancelled recovered reconsideration after ${triggeringLogin}'s permission was revoked on ` +
+                `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}`,
+              );
+            } else {
+              try {
+                const currentHeadSha = await args.getPRHeadSha(args.owner, args.repo, args.prNumber);
+                if (currentHeadSha !== existingClosure.pendingHeadSha) {
+                  args.cancelReviewThreadReconsideration(rootCommentId);
+                } else if (args.markReviewThreadReconsiderationPostAttempted(rootCommentId)) {
+                  try {
+                    await args.postReviewCommentReply(
+                      args.owner, args.repo, args.prNumber, rootCommentId, existingClosure.pendingReplyBody,
+                    );
+                    args.completeReviewThreadReconsideration(rootCommentId);
+                  } catch (err) {
+                    args.markReviewThreadReconsiderationDeliveryUnknown(rootCommentId);
+                    logger.warn(
+                      `[comment-reply-monitor] Recovered reconsideration delivery is ambiguous for ` +
+                      `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}: ${(err as Error).message}`,
+                    );
+                  }
+                }
+              } catch (err) {
+                logger.warn(
+                  `[comment-reply-monitor] Could not recheck the head for pending reconsideration ` +
+                  `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}; leaving it unattempted: ${(err as Error).message}`,
+                );
+              }
+            }
+          }
         }
       }
       continue;
     }
     if (existingClosure || args.isReviewThreadClosed?.(rootCommentId)) continue;
+
+    const existingDelivery = args.getReviewReplyDelivery?.(humanReply.id);
+    if (existingDelivery) {
+      const expectedParent = byId.get(existingDelivery.parentCommentId);
+      const expectedRootCommentId = expectedParent
+        ? getRootCommentId(byId, expectedParent)
+        : existingDelivery.parentCommentId;
+      const markerAlreadyPosted = hasExactOperationMarkerInThread(
+        comments,
+        byId,
+        args.botLogin,
+        existingDelivery.operationMarker,
+        expectedRootCommentId,
+      );
+      if (markerAlreadyPosted) {
+        args.completeReviewReplyDelivery?.(humanReply.id);
+      } else if (existingDelivery.resolution === 'delivery_unknown') {
+        // At-most-once: marker-only reconciliation, never a second POST.
+      } else if (existingDelivery.postAttempted) {
+        args.markReviewReplyDeliveryUnknown?.(humanReply.id);
+      } else {
+        try {
+          const currentHeadSha = await args.getPRHeadSha(args.owner, args.repo, args.prNumber);
+          if (currentHeadSha !== existingDelivery.pendingHeadSha) {
+            args.cancelReviewReplyDelivery?.(humanReply.id);
+          } else if (args.markReviewReplyDeliveryPostAttempted?.(humanReply.id)) {
+            try {
+              await args.postReviewCommentReply(
+                args.owner,
+                args.repo,
+                args.prNumber,
+                existingDelivery.parentCommentId,
+                existingDelivery.pendingReplyBody,
+              );
+              args.completeReviewReplyDelivery?.(humanReply.id);
+            } catch (err) {
+              args.markReviewReplyDeliveryUnknown?.(humanReply.id);
+              logger.warn(
+                `[comment-reply-monitor] Recovered reply delivery is ambiguous for ${args.owner}/${args.repo}#${args.prNumber} ` +
+                `comment ${humanReply.id}: ${(err as Error).message}`,
+              );
+            }
+          }
+        } catch (err) {
+          logger.warn(
+            `[comment-reply-monitor] Could not recheck the head for pending reply ${args.owner}/${args.repo}#${args.prNumber} ` +
+            `comment ${humanReply.id}; leaving it unattempted: ${(err as Error).message}`,
+          );
+        }
+      }
+      continue;
+    }
+
     if (args.isCommentReplied(humanReply.id)) continue;
     if (minReplyCreatedAtMs !== null && Number.isFinite(minReplyCreatedAtMs)) {
       const replyCreatedAtMs = humanReply.created_at ? new Date(humanReply.created_at).getTime() : NaN;
       if (!Number.isFinite(replyCreatedAtMs) || replyCreatedAtMs < minReplyCreatedAtMs) continue;
     }
 
-    const replyKey = getReplyKey(args, humanReply.id);
     if (inFlightReplyKeys.has(replyKey)) continue;
     inFlightReplyKeys.add(replyKey);
 
@@ -533,9 +669,26 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
         continue;
       }
 
+      let terminalPermission = humanReplyPermission;
+      if (decision.assessment === 'HUMAN_HANDOFF' || decision.assessment === 'FINDING_STILL_APPLIES') {
+        if (!humanLogin || !args.getRepositoryPermission) {
+          terminalPermission = 'none';
+        } else {
+          try {
+            terminalPermission = await args.getRepositoryPermission(args.owner, args.repo, humanLogin);
+          } catch (err) {
+            result.skipped += 1;
+            logger.warn(
+              `[comment-reply-monitor] Could not revalidate ${humanLogin}'s permission immediately before terminal action on ` +
+              `${args.owner}/${args.repo}#${args.prNumber}; will retry without closing or posting: ${(err as Error).message}`,
+            );
+            continue;
+          }
+        }
+      }
+
       if (decision.assessment === 'HUMAN_HANDOFF') {
-        if (!canCloseThreadForHumanHandoff(humanReplyPermission)) {
-          args.markCommentReplied(humanReply.id);
+        if (!canCloseThreadForHumanHandoff(terminalPermission)) {
           result.skipped += 1;
           logger.warn(
             `[comment-reply-monitor] Ignored untrusted handoff from ${humanLogin ?? 'unknown'} on ` +
@@ -544,13 +697,15 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
           continue;
         }
 
-        const recorded = args.recordReviewThreadHandoff
-          ? args.recordReviewThreadHandoff(rootCommentId, humanReply.id)
-          : (() => {
-            args.markCommentReplied(humanReply.id);
-            args.markReviewThreadClosed?.(rootCommentId, 'human_handoff');
-            return true;
-          })();
+        if (!args.recordReviewThreadHandoff) {
+          result.skipped += 1;
+          logger.error(
+            `[comment-reply-monitor] Durable handoff callback is unavailable for ` +
+            `${args.owner}/${args.repo}#${args.prNumber} thread ${rootCommentId}; refusing incomplete closure`,
+          );
+          continue;
+        }
+        const recorded = args.recordReviewThreadHandoff(rootCommentId, humanReply.id);
         if (!recorded) {
           result.skipped += 1;
           continue;
@@ -562,8 +717,7 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
         continue;
       }
 
-      if (decision.assessment === 'FINDING_STILL_APPLIES' && !canCloseThreadForHumanHandoff(humanReplyPermission)) {
-        args.markCommentReplied(humanReply.id);
+      if (decision.assessment === 'FINDING_STILL_APPLIES' && !canCloseThreadForHumanHandoff(terminalPermission)) {
         result.skipped += 1;
         logger.warn(
           `[comment-reply-monitor] Ignored terminal reconsideration requested by untrusted ${humanLogin ?? 'unknown'} on ` +
@@ -576,14 +730,31 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
       if (isReconsideration) {
         const operationMarker = getReconsiderationOperationMarker(args, rootCommentId, humanReply.id);
         const botReplyBody = `${appendBotAuthorDisclosure(decision.body!.trim())}\n\n${operationMarker}`;
-        const reserved = args.reserveReviewThreadReconsideration
-          ? args.reserveReviewThreadReconsideration(rootCommentId, humanReply.id, botReplyBody, latestHeadSha, operationMarker)
-          : true;
+        if (!humanLogin
+          || !args.reserveReviewThreadReconsideration
+          || !args.markReviewThreadReconsiderationPostAttempted
+          || !args.completeReviewThreadReconsideration
+          || !args.markReviewThreadReconsiderationDeliveryUnknown) {
+          result.skipped += 1;
+          logger.error(
+            `[comment-reply-monitor] Durable reconsideration callbacks are unavailable for ` +
+            `${args.owner}/${args.repo}#${args.prNumber} comment ${humanReply.id}; refusing unsafe POST`,
+          );
+          continue;
+        }
+        const reserved = args.reserveReviewThreadReconsideration(
+          rootCommentId,
+          humanReply.id,
+          humanLogin,
+          botReplyBody,
+          latestHeadSha,
+          operationMarker,
+        );
         if (!reserved) {
           result.skipped += 1;
           continue;
         }
-        if (args.reserveReviewThreadReconsideration && !args.markReviewThreadReconsiderationPostAttempted?.(rootCommentId)) {
+        if (!args.markReviewThreadReconsiderationPostAttempted(rootCommentId)) {
           result.skipped += 1;
           continue;
         }
@@ -592,20 +763,16 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
         try {
           postedReply = await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, botReplyBody);
         } catch (err) {
+          args.markReviewThreadReconsiderationDeliveryUnknown(rootCommentId);
           result.skipped += 1;
           logger.warn(
             `[comment-reply-monitor] Reconsideration reply delivery is ambiguous for ${args.owner}/${args.repo}#${args.prNumber} ` +
-            `comment ${humanReply.id}; pending marker reconciliation: ${(err as Error).message}`,
+            `comment ${humanReply.id}; marker-only reconciliation will not issue another POST: ${(err as Error).message}`,
           );
           continue;
         }
         const botReplyUrl = getHtmlUrl(postedReply);
-        if (args.reserveReviewThreadReconsideration) {
-          args.completeReviewThreadReconsideration?.(rootCommentId);
-        } else {
-          args.markCommentReplied(humanReply.id);
-          args.markReviewThreadClosed?.(rootCommentId, 'reconsidered_merge_boundary');
-        }
+        args.completeReviewThreadReconsideration(rootCommentId);
         try {
           await args.notifyReviewCommentReply?.({
             action: 'bot_replied',
@@ -633,9 +800,48 @@ export async function processReviewCommentReplies(args: ProcessReviewCommentRepl
         && decision.body?.trim()
         && hasVerifiedTechnicalAssessment(decision, latestHeadSha)) {
         const botReplyBody = appendBotAuthorDisclosure(decision.body.trim());
-        const postedReply = await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, botReplyBody);
+        const operationMarker = getReplyOperationMarker(args, parent.id, humanReply.id);
+        const deliveryBody = `${botReplyBody}\n\n${operationMarker}`;
+        if (!args.reserveReviewReplyDelivery
+          || !args.markReviewReplyDeliveryPostAttempted
+          || !args.completeReviewReplyDelivery
+          || !args.markReviewReplyDeliveryUnknown) {
+          result.skipped += 1;
+          logger.error(
+            `[comment-reply-monitor] Durable reply delivery callbacks are unavailable for ` +
+            `${args.owner}/${args.repo}#${args.prNumber} comment ${humanReply.id}; refusing unsafe POST`,
+          );
+          continue;
+        }
+        if (!args.reserveReviewReplyDelivery(
+          humanReply.id,
+          parent.id,
+          deliveryBody,
+          latestHeadSha,
+          operationMarker,
+        )) {
+          result.skipped += 1;
+          continue;
+        }
+        if (!args.markReviewReplyDeliveryPostAttempted(humanReply.id)) {
+          result.skipped += 1;
+          continue;
+        }
+
+        let postedReply: unknown;
+        try {
+          postedReply = await args.postReviewCommentReply(args.owner, args.repo, args.prNumber, parent.id, deliveryBody);
+        } catch (err) {
+          args.markReviewReplyDeliveryUnknown(humanReply.id);
+          result.skipped += 1;
+          logger.warn(
+            `[comment-reply-monitor] Reply delivery is ambiguous for ${args.owner}/${args.repo}#${args.prNumber} ` +
+            `comment ${humanReply.id}; marker-only reconciliation will not issue another POST: ${(err as Error).message}`,
+          );
+          continue;
+        }
         const botReplyUrl = getHtmlUrl(postedReply);
-        args.markCommentReplied(humanReply.id);
+        args.completeReviewReplyDelivery(humanReply.id);
         try {
           await args.notifyReviewCommentReply?.({
             action: 'bot_replied',

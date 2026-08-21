@@ -1,7 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 import logger from './logger';
-import { PRStatus, PRStateEntry, ReviewThreadClosure, ReviewThreadResolution, StateFile } from '../types';
+import {
+  PRStatus,
+  PRStateEntry,
+  ReviewReplyDelivery,
+  ReviewThreadClosure,
+  ReviewThreadResolution,
+  StateFile,
+} from '../types';
 
 const MAX_RETRIES = 3;
 // Resolved from this module's location (dist/src/utils → project root), not
@@ -197,6 +204,7 @@ class ReviewedPRsState {
   reserveReviewThreadReconsideration(
     threadKey: string,
     commentId: string | number,
+    triggeringLogin: string,
     pendingReplyBody: string,
     pendingHeadSha: string,
     operationMarker: string,
@@ -208,6 +216,7 @@ class ReviewedPRsState {
       closedAt: now,
       resolution: 'reconsideration_pending',
       handledCommentId: String(commentId),
+      handledCommentLogin: triggeringLogin,
       pendingReplyBody,
       pendingHeadSha,
       operationMarker,
@@ -228,7 +237,7 @@ class ReviewedPRsState {
 
   completeReviewThreadReconsideration(threadKey: string): boolean {
     const closure = this.data.closedReviewThreads?.[threadKey];
-    if (!closure || closure.resolution !== 'reconsideration_pending') return false;
+    if (!closure || !['reconsideration_pending', 'reconsideration_delivery_unknown'].includes(closure.resolution)) return false;
     closure.resolution = 'reconsidered_merge_boundary';
     delete closure.pendingReplyBody;
     delete closure.pendingHeadSha;
@@ -246,8 +255,78 @@ class ReviewedPRsState {
     return true;
   }
 
+  cancelReviewThreadReconsideration(threadKey: string): boolean {
+    const closure = this.data.closedReviewThreads?.[threadKey];
+    if (!closure || closure.resolution !== 'reconsideration_pending' || closure.postAttempted) return false;
+    if (closure.handledCommentId) delete this.data.repliedComments[closure.handledCommentId];
+    delete this.data.closedReviewThreads![threadKey];
+    this.save();
+    return true;
+  }
+
   getReviewThreadClosure(threadKey: string): ReviewThreadClosure | undefined {
     return this.data.closedReviewThreads?.[threadKey];
+  }
+
+  reserveReviewReplyDelivery(
+    deliveryKey: string,
+    humanReplyId: string | number,
+    parentCommentId: number,
+    pendingReplyBody: string,
+    pendingHeadSha: string,
+    operationMarker: string,
+  ): boolean {
+    if (this.isCommentReplied(humanReplyId) || this.data.pendingReviewReplies?.[deliveryKey]) return false;
+    this.data.pendingReviewReplies ??= {};
+    this.data.pendingReviewReplies[deliveryKey] = {
+      createdAt: new Date().toISOString(),
+      resolution: 'pending',
+      humanReplyId: String(humanReplyId),
+      parentCommentId,
+      pendingReplyBody,
+      pendingHeadSha,
+      operationMarker,
+      postAttempted: false,
+    };
+    this.save();
+    return true;
+  }
+
+  getReviewReplyDelivery(deliveryKey: string): ReviewReplyDelivery | undefined {
+    return this.data.pendingReviewReplies?.[deliveryKey];
+  }
+
+  markReviewReplyDeliveryPostAttempted(deliveryKey: string): boolean {
+    const delivery = this.data.pendingReviewReplies?.[deliveryKey];
+    if (!delivery || delivery.resolution !== 'pending' || delivery.postAttempted) return false;
+    delivery.postAttempted = true;
+    this.save();
+    return true;
+  }
+
+  markReviewReplyDeliveryUnknown(deliveryKey: string): boolean {
+    const delivery = this.data.pendingReviewReplies?.[deliveryKey];
+    if (!delivery || delivery.resolution !== 'pending') return false;
+    delivery.resolution = 'delivery_unknown';
+    this.save();
+    return true;
+  }
+
+  completeReviewReplyDelivery(deliveryKey: string): boolean {
+    const delivery = this.data.pendingReviewReplies?.[deliveryKey];
+    if (!delivery) return false;
+    this.data.repliedComments[delivery.humanReplyId] = { commentedAt: new Date().toISOString() };
+    delete this.data.pendingReviewReplies![deliveryKey];
+    this.save();
+    return true;
+  }
+
+  cancelReviewReplyDelivery(deliveryKey: string): boolean {
+    const delivery = this.data.pendingReviewReplies?.[deliveryKey];
+    if (!delivery || delivery.resolution !== 'pending' || delivery.postAttempted) return false;
+    delete this.data.pendingReviewReplies![deliveryKey];
+    this.save();
+    return true;
   }
 
   getPendingReplies(): PRStateEntry[] {
@@ -372,6 +451,8 @@ class ReviewedPRsState {
       if (!terminal.includes(pr.status)) continue;
       const ts = pr.reviewedAt ? new Date(pr.reviewedAt).getTime() : NaN;
       if (isNaN(ts) || now - ts > maxAgeMs) {
+        // Publication tombstones and ambiguous outbox records are independent safety state.
+        // Removing PR metadata must never reopen a terminal thread or allow a duplicate POST.
         delete this.data.reviewedPRs[key];
         removed++;
       }

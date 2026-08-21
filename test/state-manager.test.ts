@@ -123,6 +123,7 @@ describe('ReviewedPRsState', () => {
       expect((state as any).reserveReviewThreadReconsideration(
         threadKey,
         'comment-101',
+        'maintainer',
         'final reply <!-- marker -->',
         'head-sha',
         '<!-- marker -->',
@@ -134,16 +135,60 @@ describe('ReviewedPRsState', () => {
       reloaded.load();
       expect((reloaded as any).data.closedReviewThreads[threadKey]).toEqual(expect.objectContaining({
         resolution: 'reconsideration_pending',
+        handledCommentLogin: 'maintainer',
         operationMarker: '<!-- marker -->',
         postAttempted: false,
       }));
-      expect((reloaded as any).reserveReviewThreadReconsideration(threadKey, 'comment-102', 'body', 'head', 'marker')).toBe(false);
+      expect((reloaded as any).reserveReviewThreadReconsideration(threadKey, 'comment-102', 'maintainer', 'body', 'head', 'marker')).toBe(false);
       expect((reloaded as any).markReviewThreadReconsiderationPostAttempted(threadKey)).toBe(true);
 
       (reloaded as any).completeReviewThreadReconsideration(threadKey);
       expect((reloaded as any).data.closedReviewThreads[threadKey]).toEqual(expect.objectContaining({
         resolution: 'reconsidered_merge_boundary',
       }));
+    });
+
+    it('durably reserves and reconciles an ordinary review reply delivery', () => {
+      const deliveryKey = 'owner/repo#1:comment:101';
+      expect((state as any).reserveReviewReplyDelivery(
+        deliveryKey,
+        101,
+        100,
+        'reply body <!-- marker -->',
+        'head-sha',
+        '<!-- marker -->',
+      )).toBe(true);
+      expect(state.isCommentReplied(101)).toBe(false);
+      expect((state as any).markReviewReplyDeliveryPostAttempted(deliveryKey)).toBe(true);
+      expect((state as any).markReviewReplyDeliveryUnknown(deliveryKey)).toBe(true);
+
+      const reloaded = new ReviewedPRsState(stateFile);
+      reloaded.load();
+      expect((reloaded as any).getReviewReplyDelivery(deliveryKey)).toEqual(expect.objectContaining({
+        resolution: 'delivery_unknown',
+        humanReplyId: '101',
+        parentCommentId: 100,
+        operationMarker: '<!-- marker -->',
+        postAttempted: true,
+      }));
+      expect((reloaded as any).completeReviewReplyDelivery(deliveryKey)).toBe(true);
+      expect(reloaded.isCommentReplied(101)).toBe(true);
+      expect((reloaded as any).getReviewReplyDelivery(deliveryKey)).toBeUndefined();
+    });
+
+    it('preserves durable thread closures and reply outbox entries when pruning old PR metadata', () => {
+      const prKey = 'owner/repo#1';
+      const threadKey = `${prKey}:thread:100`;
+      const deliveryKey = `${prKey}:comment:101`;
+      state.markPRReviewed('owner', 'repo', 1, 'reviewed');
+      state.markReviewThreadClosed(threadKey, 'human_handoff');
+      state.reserveReviewReplyDelivery(deliveryKey, 101, 100, 'body', 'head', '<!-- marker -->');
+      state.data.reviewedPRs[prKey].reviewedAt = '2000-01-01T00:00:00.000Z';
+      state.save();
+
+      expect(state.pruneOldEntries(1)).toBe(1);
+      expect(state.data.closedReviewThreads?.[threadKey]).toEqual(expect.objectContaining({ resolution: 'human_handoff' }));
+      expect(state.data.pendingReviewReplies?.[deliveryKey]).toEqual(expect.objectContaining({ resolution: 'pending' }));
     });
 
     it('returns only monitorable PRs within the reply lookback window', () => {
