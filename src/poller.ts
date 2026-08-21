@@ -2,7 +2,7 @@ import cron from 'node-cron';
 import axios from 'axios';
 import { executeReviewWithRetry } from './review/polling-reviewer';
 import { executeReview, isReviewDraining } from './review/review-executor';
-import { getPRHeadSha, getAuthenticatedLogin, listReviewComments, postReviewCommentReply } from './github';
+import { getPRHeadSha, getAuthenticatedLogin, getRepositoryPermission, listReviewComments, postReviewCommentReply } from './github';
 import { judgeAndDraftReply, processReviewCommentReplies } from './monitoring/comment-reply-monitor';
 import { sendDiscordNotification } from './discord-notifier';
 import { archiveAndMaybeLearnFromThread } from './review-memory/review-memory-service';
@@ -22,6 +22,10 @@ interface GitHubPRItem {
 }
 
 type ShouldStop = () => boolean;
+
+function getReviewThreadKey(owner: string, repo: string, prNumber: number, rootCommentId: number): string {
+  return `${owner}/${repo}#${prNumber}:thread:${rootCommentId}`;
+}
 
 export interface PollingController {
   stop(timeoutMs: number): Promise<GracefulShutdownResult>;
@@ -191,6 +195,41 @@ async function pollReviewCommentReplies(shouldStop: ShouldStop = () => false): P
         minReplyCreatedAt,
         isCommentReplied: (commentId) => state.isCommentReplied(commentId),
         markCommentReplied: (commentId) => state.markCommentReplied(commentId),
+        isReviewThreadClosed: (rootCommentId) => state.isReviewThreadClosed(
+          getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+        ),
+        markReviewThreadClosed: (rootCommentId, resolution) => state.markReviewThreadClosed(
+          getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          resolution,
+        ),
+        recordReviewThreadHandoff: (rootCommentId, commentId) => state.recordReviewThreadHandoff(
+          getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          commentId,
+        ),
+        getReviewThreadClosure: (rootCommentId) => state.getReviewThreadClosure(
+          getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+        ),
+        reserveReviewThreadReconsideration: (rootCommentId, commentId, pendingReplyBody, pendingHeadSha, operationMarker) => state.reserveReviewThreadReconsideration(
+          getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          commentId,
+          pendingReplyBody,
+          pendingHeadSha,
+          operationMarker,
+        ),
+        markReviewThreadReconsiderationPostAttempted: (rootCommentId) => state.markReviewThreadReconsiderationPostAttempted(
+          getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+        ),
+        completeReviewThreadReconsideration: (rootCommentId) => {
+          state.completeReviewThreadReconsideration(
+            getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          );
+        },
+        markReviewThreadReconsiderationDeliveryUnknown: (rootCommentId) => {
+          state.markReviewThreadReconsiderationDeliveryUnknown(
+            getReviewThreadKey(pr.owner, pr.repo, pr.prNumber, rootCommentId),
+          );
+        },
+        getRepositoryPermission,
         getPRHeadSha,
         judgeAndDraftReply,
         postReviewCommentReply,

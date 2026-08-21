@@ -7,7 +7,7 @@ import axios from 'axios';
 import logger from './utils/logger';
 import config from './utils/config';
 import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from './utils/errors';
-import { PRDetails, InlineComment, ReviewComment, ReviewEvent } from './types';
+import { PRDetails, InlineComment, RepositoryPermission, ReviewComment, ReviewEvent } from './types';
 
 const GH_API = 'https://api.github.com';
 
@@ -140,10 +140,32 @@ const listReviewComments = createRetryFunction(async (owner: unknown, repo: unkn
   return all;
 }, 3, 1000) as (owner: string, repo: string, prNumber: number) => Promise<ReviewComment[]>;
 
+const VALID_REPOSITORY_PERMISSIONS: RepositoryPermission[] = ['admin', 'maintain', 'write', 'triage', 'read', 'none'];
+
+/**
+ * Resolve the current repository permission for a reply author before allowing
+ * their message to close an automated review thread.
+ */
+async function getRepositoryPermission(owner: string, repo: string, username: string): Promise<RepositoryPermission> {
+  try {
+    const res = await axios.get(
+      `${GH_API}/repos/${owner}/${repo}/collaborators/${encodeURIComponent(username)}/permission`,
+      { headers: getHeaders() },
+    );
+    checkRateLimit(res.headers as Record<string, string>);
+    const permission = res.data?.permission;
+    return VALID_REPOSITORY_PERMISSIONS.includes(permission) ? permission : 'none';
+  } catch (err) {
+    const status = (err as { response?: { status?: number } }).response?.status;
+    if (status === 404) return 'none';
+    throw err;
+  }
+}
+
 /**
  * Reply inside an existing PR review comment thread.
  */
-const postReviewCommentReply = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, commentId: unknown, body: unknown): Promise<unknown> => {
+const postReviewCommentReply = async (owner: string, repo: string, prNumber: number, commentId: number, body: string): Promise<unknown> => {
   logger.info(`Posting review comment reply to ${owner}/${repo}#${prNumber} comment ${commentId}`);
   const res = await axios.post(
     `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/comments/${commentId}/replies`,
@@ -152,7 +174,7 @@ const postReviewCommentReply = createRetryFunction(async (owner: unknown, repo: 
   );
   checkRateLimit(res.headers as Record<string, string>);
   return res.data;
-}, 3, 1000) as (owner: string, repo: string, prNumber: number, commentId: number, body: string) => Promise<unknown>;
+};
 
 /**
  * Post a review to a PR (APPROVE / REQUEST_CHANGES / COMMENT)
@@ -253,6 +275,7 @@ export {
   getPRDiff,
   postComment,
   listReviewComments,
+  getRepositoryPermission,
   postReviewCommentReply,
   postReview,
   getPRHeadSha,

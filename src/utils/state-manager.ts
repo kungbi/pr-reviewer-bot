@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import logger from './logger';
-import { PRStatus, PRStateEntry, StateFile } from '../types';
+import { PRStatus, PRStateEntry, ReviewThreadClosure, ReviewThreadResolution, StateFile } from '../types';
 
 const MAX_RETRIES = 3;
 // Resolved from this module's location (dist/src/utils → project root), not
@@ -165,6 +165,89 @@ class ReviewedPRsState {
       commentedAt: new Date().toISOString()
     };
     this.save();
+  }
+
+  isReviewThreadClosed(threadKey: string): boolean {
+    return Object.prototype.hasOwnProperty.call(this.data.closedReviewThreads ?? {}, threadKey);
+  }
+
+  markReviewThreadClosed(threadKey: string, resolution: ReviewThreadResolution): void {
+    this.data.closedReviewThreads ??= {};
+    this.data.closedReviewThreads[threadKey] = {
+      closedAt: new Date().toISOString(),
+      resolution,
+    };
+    this.save();
+  }
+
+  recordReviewThreadHandoff(threadKey: string, commentId: string | number): boolean {
+    if (this.isReviewThreadClosed(threadKey)) return false;
+    const now = new Date().toISOString();
+    this.data.closedReviewThreads ??= {};
+    this.data.closedReviewThreads[threadKey] = {
+      closedAt: now,
+      resolution: 'human_handoff',
+      handledCommentId: String(commentId),
+    };
+    this.data.repliedComments[String(commentId)] = { commentedAt: now };
+    this.save();
+    return true;
+  }
+
+  reserveReviewThreadReconsideration(
+    threadKey: string,
+    commentId: string | number,
+    pendingReplyBody: string,
+    pendingHeadSha: string,
+    operationMarker: string,
+  ): boolean {
+    if (this.isReviewThreadClosed(threadKey)) return false;
+    const now = new Date().toISOString();
+    this.data.closedReviewThreads ??= {};
+    this.data.closedReviewThreads[threadKey] = {
+      closedAt: now,
+      resolution: 'reconsideration_pending',
+      handledCommentId: String(commentId),
+      pendingReplyBody,
+      pendingHeadSha,
+      operationMarker,
+      postAttempted: false,
+    };
+    this.data.repliedComments[String(commentId)] = { commentedAt: now };
+    this.save();
+    return true;
+  }
+
+  markReviewThreadReconsiderationPostAttempted(threadKey: string): boolean {
+    const closure = this.data.closedReviewThreads?.[threadKey];
+    if (!closure || closure.resolution !== 'reconsideration_pending' || closure.postAttempted) return false;
+    closure.postAttempted = true;
+    this.save();
+    return true;
+  }
+
+  completeReviewThreadReconsideration(threadKey: string): boolean {
+    const closure = this.data.closedReviewThreads?.[threadKey];
+    if (!closure || closure.resolution !== 'reconsideration_pending') return false;
+    closure.resolution = 'reconsidered_merge_boundary';
+    delete closure.pendingReplyBody;
+    delete closure.pendingHeadSha;
+    delete closure.operationMarker;
+    delete closure.postAttempted;
+    this.save();
+    return true;
+  }
+
+  markReviewThreadReconsiderationDeliveryUnknown(threadKey: string): boolean {
+    const closure = this.data.closedReviewThreads?.[threadKey];
+    if (!closure || closure.resolution !== 'reconsideration_pending') return false;
+    closure.resolution = 'reconsideration_delivery_unknown';
+    this.save();
+    return true;
+  }
+
+  getReviewThreadClosure(threadKey: string): ReviewThreadClosure | undefined {
+    return this.data.closedReviewThreads?.[threadKey];
   }
 
   getPendingReplies(): PRStateEntry[] {

@@ -438,4 +438,301 @@ describe('processReviewCommentReplies', () => {
     expect(judgeAndDraftReply).not.toHaveBeenCalled();
     expect(result).toEqual({ scanned: 6, candidates: 0, replied: 0, skipped: 0 });
   });
+
+  it('records a human migration handoff without publicly re-arguing the finding', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin }, body: 'Use an atomic increment before enabling this route.' });
+    const humanReply = comment({
+      id: 101,
+      in_reply_to_id: 100,
+      user: { login: 'maintainer' },
+      body: 'The risk is acknowledged, but this migration keeps Django parity. We will handle it in a follow-up PR.',
+    });
+    const postReviewCommentReply = jest.fn();
+    const markReviewThreadClosed = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      markReviewThreadClosed,
+      getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'HUMAN_HANDOFF',
+        body: 'The change is still required in this PR.',
+        verification,
+      }),
+      postReviewCommentReply,
+    } as any);
+
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+    expect(markReviewThreadClosed).toHaveBeenCalledWith(100, 'human_handoff');
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('posts one reconsidered merge-boundary concern then closes that review thread', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const markReviewThreadClosed = jest.fn();
+    const postReviewCommentReply = jest.fn().mockResolvedValue({ html_url: 'https://example.com/reconsidered' });
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      markReviewThreadClosed,
+      getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_STILL_APPLIES',
+        body: 'I reconsidered the migration scope. This route becomes active at merge, so fix, disable it, or obtain an explicit maintainer waiver.',
+        verification,
+      }),
+      postReviewCommentReply,
+    } as any);
+
+    expect(postReviewCommentReply).toHaveBeenCalledTimes(1);
+    expect(markReviewThreadClosed).toHaveBeenCalledWith(100, 'reconsidered_merge_boundary');
+  });
+
+  it('does not reopen a review thread after the single reconsideration', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const laterHumanReply = comment({ id: 102, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const judgeAndDraftReply = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, laterHumanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      markReviewThreadClosed: jest.fn(),
+      judgeAndDraftReply,
+      postReviewCommentReply: jest.fn(),
+    } as any);
+
+    expect(judgeAndDraftReply).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 0, replied: 0, skipped: 0 });
+  });
+
+  it('persists the reconsideration closure before best-effort notifications fail', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const markCommentReplied = jest.fn();
+    const markReviewThreadClosed = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied,
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      markReviewThreadClosed,
+      getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_STILL_APPLIES',
+        body: 'I reconsidered the evidence and this must be resolved before merge.',
+        verification,
+      }),
+      postReviewCommentReply: jest.fn().mockResolvedValue({ html_url: 'https://example.com/reconsidered' }),
+      notifyReviewCommentReply: jest.fn().mockRejectedValue(new Error('Discord unavailable')),
+    } as any);
+
+    expect(markCommentReplied).toHaveBeenCalledWith(101);
+    expect(markReviewThreadClosed).toHaveBeenCalledWith(100, 'reconsidered_merge_boundary');
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 1, skipped: 0 });
+  });
+
+  it('reconciles an unattempted durable reconsideration after restart before any new judging', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const pendingReplyBody = 'I reconsidered this. <!-- pr-reviewer-reconsideration:marker -->';
+    const postReviewCommentReply = jest.fn().mockResolvedValue({ html_url: 'https://example.com/recovered' });
+    const judgeAndDraftReply = jest.fn();
+    const markReviewThreadReconsiderationPostAttempted = jest.fn().mockReturnValue(true);
+    const completeReviewThreadReconsideration = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(true),
+      isReviewThreadClosed: jest.fn().mockReturnValue(true),
+      getReviewThreadClosure: jest.fn().mockReturnValue({
+        resolution: 'reconsideration_pending',
+        pendingReplyBody,
+        pendingHeadSha: 'current-head-sha',
+        operationMarker: '<!-- pr-reviewer-reconsideration:marker -->',
+        postAttempted: false,
+      }),
+      markReviewThreadReconsiderationPostAttempted,
+      completeReviewThreadReconsideration,
+      postReviewCommentReply,
+      judgeAndDraftReply,
+    } as any);
+
+    expect(markReviewThreadReconsiderationPostAttempted).toHaveBeenCalledWith(100);
+    expect(postReviewCommentReply).toHaveBeenCalledWith('fan-maum', 'fanmaum-api', 601, 100, pendingReplyBody);
+    expect(completeReviewThreadReconsideration).toHaveBeenCalledWith(100);
+    expect(judgeAndDraftReply).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 0, replied: 0, skipped: 0 });
+  });
+
+  it('does not let a read-only participant close a thread by declaring a handoff', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'external-contributor' } });
+    const markReviewThreadClosed = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      markReviewThreadClosed,
+      getRepositoryPermission: jest.fn().mockResolvedValue('read'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'NO_REPLY',
+        assessment: 'HUMAN_HANDOFF',
+        verification,
+      }),
+      postReviewCommentReply: jest.fn(),
+    } as any);
+
+    expect(markReviewThreadClosed).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('rejects a reconsideration assessment that omits its required final response', () => {
+    const decision = normalizeReplyDecision({
+      verdict: 'NO_REPLY',
+      assessment: 'FINDING_STILL_APPLIES',
+      verification,
+    }, 'current-head-sha');
+
+    expect(decision).toEqual(expect.objectContaining({
+      verdict: 'NO_REPLY',
+      assessment: 'NEEDS_HUMAN_JUDGMENT',
+    }));
+  });
+
+  it('does not let a read-only participant trigger a terminal reconsideration', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'external-contributor' } });
+    const markReviewThreadClosed = jest.fn();
+    const postReviewCommentReply = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      markReviewThreadClosed,
+      getRepositoryPermission: jest.fn().mockResolvedValue('read'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_STILL_APPLIES',
+        body: 'This still needs a merge-boundary response.',
+        verification,
+      }),
+      postReviewCommentReply,
+    } as any);
+
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+    expect(markReviewThreadClosed).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('does not publish a reconsideration when its durable reservation is unavailable', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const postReviewCommentReply = jest.fn();
+
+    const result = await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      reserveReviewThreadReconsideration: jest.fn().mockReturnValue(false),
+      getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_STILL_APPLIES',
+        body: 'I reconsidered this. The unsafe route activates on merge.',
+        verification,
+      }),
+      postReviewCommentReply,
+    } as any);
+
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
+    expect(result).toEqual({ scanned: 2, candidates: 1, replied: 0, skipped: 1 });
+  });
+
+  it('reserves a reconsideration closure before publishing so a crash cannot trigger a second reply', async () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+    const order: string[] = [];
+    const reserveReviewThreadReconsideration = jest.fn(() => {
+      order.push('reserve');
+      return true;
+    });
+    const postReviewCommentReply = jest.fn().mockImplementation(async () => {
+      expect(order).toEqual(['reserve']);
+      order.push('post');
+      return { html_url: 'https://example.com/reconsidered' };
+    });
+    const completeReviewThreadReconsideration = jest.fn(() => order.push('complete'));
+
+    await processReviewCommentReplies({
+      ...baseArgs,
+      comments: [parent, humanReply],
+      isCommentReplied: jest.fn().mockReturnValue(false),
+      markCommentReplied: jest.fn(),
+      isReviewThreadClosed: jest.fn().mockReturnValue(false),
+      markReviewThreadClosed: jest.fn(),
+      reserveReviewThreadReconsideration,
+      markReviewThreadReconsiderationPostAttempted: jest.fn().mockReturnValue(true),
+      completeReviewThreadReconsideration,
+      getRepositoryPermission: jest.fn().mockResolvedValue('maintain'),
+      judgeAndDraftReply: jest.fn().mockResolvedValue({
+        verdict: 'REPLY_NEEDED',
+        assessment: 'FINDING_STILL_APPLIES',
+        body: 'I reconsidered this. The unsafe route activates on merge.',
+        verification,
+      }),
+      postReviewCommentReply,
+    } as any);
+
+    expect(reserveReviewThreadReconsideration).toHaveBeenCalledWith(
+      100,
+      101,
+      expect.stringContaining('pr-reviewer-reconsideration'),
+      'current-head-sha',
+      expect.stringContaining('pr-reviewer-reconsideration'),
+    );
+    expect(completeReviewThreadReconsideration).toHaveBeenCalledWith(100);
+    expect(order).toEqual(['reserve', 'post', 'complete']);
+  });
+
+  it('tells the responder not to re-argue a migration-parity handoff or a malformed direct-request int edge case', () => {
+    const parent = comment({ id: 100, user: { login: botLogin } });
+    const humanReply = comment({ id: 101, in_reply_to_id: 100, user: { login: 'maintainer' } });
+
+    const prompt = buildReplyVerificationPrompt({
+      ...baseArgs,
+      latestHeadSha: 'current-head-sha',
+      originalBotComment: parent,
+      humanReply,
+    });
+
+    expect(prompt).toContain('HUMAN_HANDOFF');
+    expect(prompt).toContain('Do not keep debating after that single response');
+    expect(prompt).toContain('direct malformed request');
+  });
 });

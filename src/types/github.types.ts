@@ -36,6 +36,8 @@ export interface ReviewComment {
   updated_at?: string;
 }
 
+export type RepositoryPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none';
+
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 
 export interface ReviewRequester {

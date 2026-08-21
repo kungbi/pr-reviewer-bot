@@ -105,6 +105,47 @@ describe('ReviewedPRsState', () => {
       expect(state.isCommentReplied('unknown')).toBe(false);
     });
 
+    it('persists a closed review thread so a later poll cannot reopen a human handoff', () => {
+      const threadKey = 'owner/repo#1:thread:100';
+      (state as any).markReviewThreadClosed(threadKey, 'human_handoff');
+      expect((state as any).isReviewThreadClosed(threadKey)).toBe(true);
+
+      const reloaded = new ReviewedPRsState(stateFile);
+      reloaded.load();
+      expect((reloaded as any).isReviewThreadClosed(threadKey)).toBe(true);
+      expect((reloaded as any).data.closedReviewThreads[threadKey]).toEqual(expect.objectContaining({
+        resolution: 'human_handoff',
+      }));
+    });
+
+    it('durably reserves a single reconsideration before its external GitHub post', () => {
+      const threadKey = 'owner/repo#1:thread:100';
+      expect((state as any).reserveReviewThreadReconsideration(
+        threadKey,
+        'comment-101',
+        'final reply <!-- marker -->',
+        'head-sha',
+        '<!-- marker -->',
+      )).toBe(true);
+      expect(state.isCommentReplied('comment-101')).toBe(true);
+      expect((state as any).isReviewThreadClosed(threadKey)).toBe(true);
+
+      const reloaded = new ReviewedPRsState(stateFile);
+      reloaded.load();
+      expect((reloaded as any).data.closedReviewThreads[threadKey]).toEqual(expect.objectContaining({
+        resolution: 'reconsideration_pending',
+        operationMarker: '<!-- marker -->',
+        postAttempted: false,
+      }));
+      expect((reloaded as any).reserveReviewThreadReconsideration(threadKey, 'comment-102', 'body', 'head', 'marker')).toBe(false);
+      expect((reloaded as any).markReviewThreadReconsiderationPostAttempted(threadKey)).toBe(true);
+
+      (reloaded as any).completeReviewThreadReconsideration(threadKey);
+      expect((reloaded as any).data.closedReviewThreads[threadKey]).toEqual(expect.objectContaining({
+        resolution: 'reconsidered_merge_boundary',
+      }));
+    });
+
     it('returns only monitorable PRs within the reply lookback window', () => {
       state.markPRReviewed('owner', 'repo', 1, 'reviewed');
       state.markPRReviewed('owner', 'repo', 2, 'skipped');
