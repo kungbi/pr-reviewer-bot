@@ -1,4 +1,14 @@
 import { runReviewVerificationGate } from '../src/review/review-verification-gate';
+import * as verificationGateModule from '../src/review/review-verification-gate';
+import { ModelCapacityError } from '../src/utils/sessions_spawn';
+
+const runModelCapacityRetry = (verificationGateModule as typeof verificationGateModule & {
+  runModelCapacityRetry: <T>(
+    stage: string,
+    invoke: () => Promise<T>,
+    options?: { maxAttempts?: number; baseDelayMs?: number; random?: () => number; sleep?: (ms: number) => Promise<void> },
+  ) => Promise<T>;
+}).runModelCapacityRetry;
 
 describe('runReviewVerificationGate', () => {
   const firstDraft = JSON.stringify({
@@ -213,5 +223,63 @@ describe('runReviewVerificationGate', () => {
     })).rejects.toThrow('invalid review draft');
 
     expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('capacity recovery in review gate', () => {
+  it('retries a failed Ponytail pass without rerunning the completed primary pass', async () => {
+    const primary = JSON.stringify({ summary: 'primary', comments: [], replies: [] });
+    const ponytail = JSON.stringify({ summary: 'lean', comments: [], replies: [] });
+    const verified = JSON.stringify({ summary: 'verified', comments: [], replies: [] });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(primary)
+      .mockRejectedValueOnce(new ModelCapacityError('temporary capacity'))
+      .mockResolvedValueOnce(ponytail)
+      .mockResolvedValueOnce(verified);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const sleep = jest.fn().mockResolvedValue(undefined);
+    const args = {
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
+      capacityRetry: { baseDelayMs: 0, random: () => 0, sleep },
+    } as Parameters<typeof runReviewVerificationGate>[0] & {
+      capacityRetry: { baseDelayMs: number; random: () => number; sleep: (ms: number) => Promise<void> };
+    };
+
+    await expect(runReviewVerificationGate(args)).resolves.toMatchObject({ summary: 'verified' });
+
+    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn.mock.calls[0][0]).toContain('1차 코드 리뷰어');
+    expect(spawn.mock.calls[1][0]).toContain('Ponytail');
+    expect(spawn.mock.calls[2][0]).toContain('Ponytail');
+    expect(spawn.mock.calls[3][0]).toContain('독립 검증자');
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runModelCapacityRetry', () => {
+  it('retries only the failed stage after a structured capacity error', async () => {
+    const invoke = jest.fn()
+      .mockRejectedValueOnce(new ModelCapacityError('temporary capacity'))
+      .mockResolvedValueOnce('verified output');
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runModelCapacityRetry('verifier', invoke, {
+      baseDelayMs: 100,
+      random: () => 0,
+      sleep,
+    })).resolves.toBe('verified output');
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(100);
+  });
+
+  it('does not retry a semantic or malformed-output failure', async () => {
+    const invoke = jest.fn().mockRejectedValue(new Error('invalid review draft'));
+    const sleep = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runModelCapacityRetry('primary', invoke, { sleep })).rejects.toThrow('invalid review draft');
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 });

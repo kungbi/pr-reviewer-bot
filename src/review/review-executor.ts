@@ -14,7 +14,7 @@ import {
   postReviewCommentReply,
   verifyReviewPosted,
 } from '../github';
-import { sessions_spawn } from '../utils/sessions_spawn';
+import { sessions_spawn, ModelCapacityError } from '../utils/sessions_spawn';
 import { shouldUseLocalClone } from '../utils/agent-command';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
 import { getReviewMemoryContext } from '../review-memory/review-memory-service';
@@ -118,6 +118,7 @@ async function executeReviewInternal(
 
     let verifiedDraft: ReviewDraft | null = null;
     let subagentFailed = false;
+    let subagentError: Error | null = null;
     try {
       if (!headSha) {
         headSha = await getPRHeadSha(owner, repo, prNumber);
@@ -166,7 +167,8 @@ async function executeReviewInternal(
         `(${verifiedDraft.comments.length} inline comment(s), ${verifiedDraft.replies.length} reply/replies)`,
       );
     } catch (err) {
-      logger.error(`[review-executor] Review draft/verification failed: ${(err as Error).message}`);
+      subagentError = err instanceof Error ? err : new Error(String(err));
+      logger.error(`[review-executor] Review draft/verification failed: ${subagentError.message}`);
       subagentFailed = true;
     } finally {
       if (clonePath) {
@@ -198,6 +200,13 @@ async function executeReviewInternal(
     // exhausted, so transient failures don't litter the PR with duplicate
     // "Auto-Review Failed" comments. Throwing routes the PR through
     // executeReviewWithRetry for retry handling.
+    // A provider capacity error has already exhausted its stage-local backoff.
+    // Preserve its type so the polling wrapper releases the review lock without
+    // consuming the semantic retry budget or emitting a generic failure alert.
+    if (subagentError instanceof ModelCapacityError) {
+      throw subagentError;
+    }
+
     if (subagentFailed || reviewMissing) {
       const reason = subagentFailed
         ? `${config.reviewAgent} 서브에이전트 실행 실패`

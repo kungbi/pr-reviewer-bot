@@ -87,6 +87,20 @@ describe('ReviewedPRsState', () => {
       expect(state.isPRPendingRetry('owner', 'repo', 1)).toBe(true);
     });
 
+    it('releases a capacity-failed reviewing lock without incrementing semantic retries', () => {
+      state.markPRReviewing('owner', 'repo', 1);
+      const stateWithCapacityRetry = state as ReviewedPRsState & {
+        markPRCapacityRetry: (owner: string, repo: string, prNumber: number, errorMessage: string) => void;
+      };
+
+      stateWithCapacityRetry.markPRCapacityRetry('owner', 'repo', 1, 'server_overloaded');
+
+      expect(state.isPRReviewing('owner', 'repo', 1)).toBe(false);
+      expect(state.isPRPendingRetry('owner', 'repo', 1)).toBe(true);
+      expect(state.getPRRetryCount('owner', 'repo', 1)).toBe(0);
+      expect((state.data.reviewedPRs['owner/repo#1'] as { capacityRetryCount?: number }).capacityRetryCount).toBe(1);
+    });
+
     it('clearPRRetries resets state to reviewed', () => {
       state.markPRRetryFailure('owner', 'repo', 1, 'err');
       state.clearPRRetries('owner', 'repo', 1);

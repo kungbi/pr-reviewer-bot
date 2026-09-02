@@ -7,7 +7,7 @@
  *                prompt delivered via stdin.
  *   - opencode : `opencode run [--model <provider/model>] --dangerously-skip-permissions <prompt>`
  *                prompt delivered as a positional argument.
- *   - codex    : `codex exec [--model <name>] --dangerously-bypass-approvals-and-sandbox
+ *   - codex    : `codex exec --json [--model <name>] --dangerously-bypass-approvals-and-sandbox
  *                 --skip-git-repo-check <prompt>`
  *                prompt delivered as a positional argument.
  *   - hermes   : `hermes --profile <profile> chat -Q -t terminal -q <prompt>`
@@ -87,6 +87,7 @@ export function buildAgentInvocation(
       command: 'codex',
       args: [
         'exec',
+        '--json',
         ...(model ? ['--model', model] : []),
         ...(codexReasoningEffort ? ['-c', `model_reasoning_effort="${codexReasoningEffort}"`] : []),
         '--dangerously-bypass-approvals-and-sandbox',

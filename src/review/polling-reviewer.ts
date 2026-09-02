@@ -10,6 +10,7 @@ import { postComment } from '../github';
 import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
 import config from '../utils/config';
 import logger from '../utils/logger';
+import { ModelCapacityError } from '../utils/sessions_spawn';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
 
 /**
@@ -42,6 +43,17 @@ async function executeReviewWithRetry(
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const timestamp = new Date().toISOString();
+
+    if (err instanceof ModelCapacityError) {
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg);
+      logger.warn(
+        `[PollingReviewer] [${timestamp}] Capacity unavailable for PR ${prLabel}; ` +
+        `stage=${err.stage ?? 'unknown'}, capacityAttempts=${err.attempts ?? 1}/${MAX_RETRIES}, ` +
+        `model=${config.reviewModel ?? 'default'}, fallbackAllowed=false. ` +
+        'PR remains eligible for the next poll; permanent retry budget is unchanged.'
+      );
+      return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
+    }
 
     logger.error(`[PollingReviewer] [${timestamp}] Review FAILED for PR ${prLabel} (attempt ${currentRetries + 1}) — ${errMsg}`);
 

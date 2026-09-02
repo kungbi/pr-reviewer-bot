@@ -1,4 +1,8 @@
 import { ReviewMemoryContext } from '../types';
+import config from '../utils/config';
+import { sleep } from '../utils/errors';
+import logger from '../utils/logger';
+import { ModelCapacityError } from '../utils/sessions_spawn';
 import {
   buildPonytailReviewPrompt,
   buildReviewDraftPrompt,
@@ -16,6 +20,54 @@ export interface ReviewAgentSpawnOptions {
   timeoutMs?: number;
 }
 
+export interface ModelCapacityRetryOptions {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  random?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export const MODEL_CAPACITY_MAX_ATTEMPTS = 3;
+const MODEL_CAPACITY_BASE_DELAY_MS = 10_000;
+
+/**
+ * Retries only a provider-transient capacity failure. It deliberately does not
+ * catch malformed output, policy failures, or any other semantic review error.
+ */
+export async function runModelCapacityRetry<T>(
+  stage: 'primary' | 'ponytail' | 'verifier',
+  invoke: () => Promise<T>,
+  options: ModelCapacityRetryOptions = {},
+): Promise<T> {
+  const maxAttempts = options.maxAttempts ?? MODEL_CAPACITY_MAX_ATTEMPTS;
+  const baseDelayMs = options.baseDelayMs ?? MODEL_CAPACITY_BASE_DELAY_MS;
+  const sleepFn = options.sleep ?? sleep;
+  const random = options.random ?? Math.random;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await invoke();
+    } catch (error) {
+      if (!(error instanceof ModelCapacityError)) throw error;
+      if (attempt === maxAttempts) {
+        throw new ModelCapacityError(error.detail, stage, attempt);
+      }
+
+      const boundedRandom = Math.max(0, Math.min(1, random()));
+      const delayMs = Math.round(baseDelayMs * (2 ** (attempt - 1)) * (1 + boundedRandom * 0.2));
+      const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+      logger.warn(
+        `[ReviewVerificationGate] capacity retry: stage=${stage}, attempt=${attempt}/${maxAttempts}, ` +
+        `nextRetryAt=${nextRetryAt}, model=${config.reviewModel ?? 'default'}, ` +
+        `reasoning=${config.codexReasoningEffort ?? 'default'}, fallbackAllowed=false`
+      );
+      await sleepFn(delayMs);
+    }
+  }
+
+  throw new Error('unreachable model capacity retry state');
+}
+
 export interface RunReviewVerificationGateArgs {
   owner: string;
   repo: string;
@@ -24,6 +76,7 @@ export interface RunReviewVerificationGateArgs {
   isReReview?: boolean;
   previousSha?: string | null;
   reviewMemory?: ReviewMemoryContext;
+  capacityRetry?: ModelCapacityRetryOptions;
   spawn: (prompt: string, options?: ReviewAgentSpawnOptions) => Promise<string>;
   publish: (draft: ReviewDraft) => Promise<void>;
 }
@@ -45,16 +98,25 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
   };
   const spawnOptions = args.clonePath ? { cwd: args.clonePath } : undefined;
 
-  const primaryOutput = await args.spawn(buildReviewDraftPrompt(promptParams), spawnOptions);
+  const primaryOutput = await runModelCapacityRetry(
+    'primary',
+    () => args.spawn(buildReviewDraftPrompt(promptParams), spawnOptions),
+    args.capacityRetry,
+  );
   const primaryCandidate = parseReviewDraft(primaryOutput);
 
-  const ponytailOutput = await args.spawn(buildPonytailReviewPrompt(promptParams), spawnOptions);
+  const ponytailOutput = await runModelCapacityRetry(
+    'ponytail',
+    () => args.spawn(buildPonytailReviewPrompt(promptParams), spawnOptions),
+    args.capacityRetry,
+  );
   const ponytailCandidate = parsePonytailReviewDraft(ponytailOutput);
   const candidate = mergeReviewDrafts(primaryCandidate, ponytailCandidate);
 
-  const verificationOutput = await args.spawn(
-    buildReviewVerificationPrompt({ ...promptParams, candidate }),
-    spawnOptions,
+  const verificationOutput = await runModelCapacityRetry(
+    'verifier',
+    () => args.spawn(buildReviewVerificationPrompt({ ...promptParams, candidate }), spawnOptions),
+    args.capacityRetry,
   );
   const verifiedDraft = validateVerifiedProposalFindings(
     parseReviewDraft(verificationOutput),

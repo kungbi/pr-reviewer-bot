@@ -93,6 +93,7 @@ describe('buildAgentInvocation', () => {
       expect(inv.command).toBe('codex');
       expect(inv.args).toEqual([
         'exec',
+        '--json',
         '--model',
         'gpt-5.2-codex',
         '-c',
@@ -110,6 +111,7 @@ describe('buildAgentInvocation', () => {
 
       expect(inv.args).toEqual([
         'exec',
+        '--json',
         '--dangerously-bypass-approvals-and-sandbox',
         '--skip-git-repo-check',
         PROMPT,

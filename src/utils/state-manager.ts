@@ -406,6 +406,31 @@ class ReviewedPRsState {
   }
 
   /**
+   * Release the in-progress lock after a provider capacity failure without
+   * consuming the semantic retry budget. The next polling cycle may retry it.
+   */
+  markPRCapacityRetry(owner: string, repo: string, prNumber: number, errorMessage: string): void {
+    const key = this._getPRKey(owner, repo, prNumber);
+    const existing: PRStateEntry = this.data.reviewedPRs[key] || {
+      owner, repo, prNumber, status: 'pending_retry', retryCount: 0, failures: []
+    };
+    const now = new Date().toISOString();
+
+    this.data.reviewedPRs[key] = {
+      ...existing,
+      owner,
+      repo,
+      prNumber,
+      status: 'pending_retry',
+      capacityRetryCount: (existing.capacityRetryCount || 0) + 1,
+      lastCapacityAt: now,
+      lastCapacityError: errorMessage,
+      reviewingAt: undefined,
+    };
+    this.save();
+  }
+
+  /**
    * Check if PR is permanently skipped (max retries exceeded)
    */
   isPRSkipped(owner: string, repo: string, prNumber: number): boolean {
@@ -432,6 +457,9 @@ class ReviewedPRsState {
       delete this.data.reviewedPRs[key].retryCount;
       delete this.data.reviewedPRs[key].failures;
       delete this.data.reviewedPRs[key].lastFailedAt;
+      delete this.data.reviewedPRs[key].capacityRetryCount;
+      delete this.data.reviewedPRs[key].lastCapacityAt;
+      delete this.data.reviewedPRs[key].lastCapacityError;
       this.data.reviewedPRs[key].status = 'reviewed';
       this.save();
     }

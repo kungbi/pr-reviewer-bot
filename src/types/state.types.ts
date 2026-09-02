@@ -22,6 +22,9 @@ export interface PRStateEntry {
   retryCount?: number;
   failures?: Array<{ timestamp: string; error: string }>;
   lastFailedAt?: string;
+  capacityRetryCount?: number;
+  lastCapacityAt?: string;
+  lastCapacityError?: string;
 }
 
 export interface StateFile {

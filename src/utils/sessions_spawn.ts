@@ -36,6 +36,82 @@ export function buildReviewAgentEnvironment(parentEnvironment: NodeJS.ProcessEnv
   return childEnvironment;
 }
 
+export class ModelCapacityError extends Error {
+  readonly code = 'server_overloaded';
+
+  constructor(
+    readonly detail: string,
+    readonly stage?: 'primary' | 'ponytail' | 'verifier',
+    readonly attempts?: number,
+  ) {
+    super(`server_overloaded${stage ? ` at ${stage}` : ''}: ${detail}`);
+    this.name = 'ModelCapacityError';
+  }
+}
+
+const MODEL_CAPACITY_PATTERN = /server_overloaded|selected model is at capacity/i;
+
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function getTerminalCapacityDetail(event: JsonRecord): string | null {
+  if (event.type !== 'turn.failed' || !isJsonRecord(event.error)) return null;
+
+  const code = event.error.code;
+  const message = event.error.message;
+  if (code === 'server_overloaded' ||
+      (typeof message === 'string' && MODEL_CAPACITY_PATTERN.test(message))) {
+    return JSON.stringify(event.error);
+  }
+  return null;
+}
+
+/**
+ * Codex `exec --json` emits newline-delimited lifecycle events. Keep only the
+ * final agent response; terminal errors are machine-readable and must not be
+ * collapsed into a generic non-zero subprocess error.
+ */
+export function parseCodexExecJsonl(output: string): string {
+  const messages: string[] = [];
+  let capacityDetail: string | null = null;
+
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isJsonRecord(event)) continue;
+
+    const item = isJsonRecord(event.item) ? event.item : null;
+    const isAgentMessage = item?.type === 'agent_message';
+    if (isAgentMessage && typeof item.text === 'string' && item.text.trim()) {
+      messages.push(item.text.trim());
+      continue;
+    }
+
+    const capacityError = getTerminalCapacityDetail(event);
+    if (capacityError) {
+      capacityDetail = capacityError;
+    }
+  }
+
+  if (capacityDetail) {
+    throw new ModelCapacityError(capacityDetail);
+  }
+  const finalMessage = messages.at(-1);
+  if (!finalMessage) {
+    throw new Error('Codex JSONL completed without an agent message');
+  }
+  return finalMessage;
+}
+
 export async function sessions_spawn(prompt: string, options?: SpawnOptions): Promise<string> {
   const { command, args, promptViaStdin } = buildAgentInvocation(
     prompt,
@@ -91,10 +167,24 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
       settled = true;
       clearTimeout(killTimer);
       if (code === 0) {
-        const trimmed = output.trim();
-        console.log(`[sessions_spawn] Completed (${trimmed.length} chars)`);
-        resolve(trimmed);
+        try {
+          const trimmed = command === 'codex'
+            ? parseCodexExecJsonl(output)
+            : output.trim();
+          console.log(`[sessions_spawn] Completed (${trimmed.length} chars)`);
+          resolve(trimmed);
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
       } else {
+        try {
+          if (command === 'codex') parseCodexExecJsonl(output);
+        } catch (error) {
+          if (error instanceof ModelCapacityError) {
+            reject(error);
+            return;
+          }
+        }
         console.error(`[sessions_spawn] Exited with code ${code}:`, errorOutput.slice(0, 500));
         reject(new Error(`${command} exited with code ${code}: ${errorOutput.slice(0, 200)}`));
       }
