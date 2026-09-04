@@ -54,6 +54,50 @@ describe('runReviewVerificationGate', () => {
     expect(result.summary).toBe('검증 통과: 실제 오류 처리 누락');
   });
 
+  it('selects initial repository context before drafting and refreshes the selected sibling repositories', async () => {
+    const repositorySelection = JSON.stringify({
+      repositories: [
+        { fullName: 'org/worker', reason: '이 PR이 변경한 이벤트의 소비자입니다.' },
+      ],
+    });
+    const repositoryCatalog = [
+      {
+        owner: 'org', repo: 'repo', fullName: 'org/repo', description: 'API',
+        defaultBranch: 'main', path: '/cache/org/repo',
+      },
+      {
+        owner: 'org', repo: 'worker', fullName: 'org/worker', description: 'Consumer',
+        defaultBranch: 'main', path: '/cache/org/worker',
+      },
+    ];
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(repositorySelection)
+      .mockResolvedValueOnce(firstDraft)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(verifiedDraft);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const refreshSelectedRepositories = jest.fn().mockResolvedValue(undefined);
+
+    await runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', baseBranch: 'main',
+      repositoryCatalog,
+      repositoryCatalogPath: '/cache/repositories.json',
+      refreshSelectedRepositories,
+      spawn,
+      publish,
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn.mock.calls[0][0]).toContain('상세 코드 리뷰를 시작하기 전에');
+    expect(refreshSelectedRepositories).toHaveBeenCalledWith(['org/worker']);
+    expect(spawn.mock.calls[1][0]).toContain('/tmp/repo');
+    expect(spawn.mock.calls[1][0]).toContain('/cache/org/worker');
+    expect(spawn.mock.calls[1][0]).toContain('초기 선정은 탐색 상한선이 아니다');
+    expect(spawn.mock.calls[2][0]).toContain('/cache/org/worker');
+    expect(spawn.mock.calls[3][0]).toContain('/cache/org/worker');
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it('runs Ponytail separately, merges its Minor candidates, then sends the combined draft to verification', async () => {
     const ponytailDraft = JSON.stringify({
       summary: 'net: -8 lines possible.',

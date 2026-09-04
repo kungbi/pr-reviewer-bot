@@ -17,6 +17,7 @@ import {
 import { sessions_spawn, ModelCapacityError } from '../utils/sessions_spawn';
 import { shouldUseLocalClone } from '../utils/agent-command';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
+import { getSharedRepositoryCache, RepositoryCache } from './repository-cache';
 import { getReviewMemoryContext } from '../review-memory/review-memory-service';
 import { getReviewSeveritySummary, getReviewVerdict, ReviewDraft } from './review-draft';
 import { publishVerifiedDraft } from './review-publisher';
@@ -104,9 +105,30 @@ async function executeReviewInternal(
 
     // ── 4. Clone (optional) + run subagent ───────────────────────────────────
     let clonePath: string | undefined;
+    let repositoryCache: RepositoryCache | undefined;
+    let cachedWorkspace = false;
     if (config.prCloneEnabled && shouldUseLocalClone(config.reviewAgent)) {
-      const cloneResult = await cloneRepoForPR({ owner, repo, prNumber });
+      let cloneResult;
+      if (config.repositoryCacheEnabled) {
+        repositoryCache = getSharedRepositoryCache();
+        cloneResult = await repositoryCache.preparePRWorkspace({ owner, repo, prNumber });
+        cachedWorkspace = cloneResult.ok;
+        if (!cloneResult.ok) {
+          logger.warn(`[review-executor] Cached worktree failed (${cloneResult.reason}) — falling back to one-off clone`);
+        }
+      }
+      if (!cloneResult?.ok) {
+        cloneResult = await cloneRepoForPR({ owner, repo, prNumber });
+      }
       if (cloneResult.ok) {
+        if (cloneResult.headSha) {
+          if (headSha && headSha !== cloneResult.headSha) {
+            logger.info(
+              `[review-executor] PR head changed while preparing the workspace: ${headSha} → ${cloneResult.headSha}`,
+            );
+          }
+          headSha = cloneResult.headSha;
+        }
         clonePath = cloneResult.path;
         logger.info(`[review-executor] Clone ready at ${clonePath} for ${owner}/${repo}#${prNumber}`);
       } else {
@@ -150,6 +172,12 @@ async function executeReviewInternal(
         isReReview,
         previousSha,
         reviewMemory,
+        baseBranch: prBaseBranch ?? undefined,
+        repositoryCatalog: cachedWorkspace ? repositoryCache?.getCatalog() : undefined,
+        repositoryCatalogPath: cachedWorkspace ? repositoryCache?.getCatalogPath() : undefined,
+        refreshSelectedRepositories: cachedWorkspace && repositoryCache
+          ? (fullNames) => repositoryCache!.refreshRepositories(fullNames)
+          : undefined,
         spawn: sessions_spawn,
         publish: async (draft) => publishVerifiedDraft({
           owner,
@@ -172,7 +200,11 @@ async function executeReviewInternal(
       subagentFailed = true;
     } finally {
       if (clonePath) {
-        await cleanupClone(clonePath);
+        if (cachedWorkspace && repositoryCache) {
+          await repositoryCache.cleanupPRWorkspace(clonePath);
+        } else {
+          await cleanupClone(clonePath);
+        }
         logger.info(`[review-executor] Clone cleaned up: ${clonePath}`);
       }
     }

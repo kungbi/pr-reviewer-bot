@@ -30,14 +30,15 @@ function runGit(
   args: string[],
   cwd: string,
   timeoutMs: number
-): Promise<void> {
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    let stdout = '';
     let stderr = '';
     let timedOut = false;
 
     const proc = spawn('git', args, {
       cwd,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     const timer = setTimeout(() => {
@@ -45,6 +46,10 @@ function runGit(
       proc.kill('SIGKILL');
       reject({ timedOut: true, stderr });
     }, timeoutMs);
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
 
     proc.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
@@ -54,7 +59,7 @@ function runGit(
       clearTimeout(timer);
       if (timedOut) return; // already rejected
       if (code === 0) {
-        resolve();
+        resolve(stdout.trim());
       } else {
         reject({ timedOut: false, stderr, code });
       }
@@ -127,7 +132,7 @@ export async function cleanupStaleClones(): Promise<number> {
 
 /**
  * Clone the repo for a given PR and check out its branch.
- * Returns { ok: true, path } on success, { ok: false, reason } on any failure.
+ * Returns { ok: true, path, headSha } on success, { ok: false, reason } on any failure.
  * On failure, the temp directory is cleaned up before returning.
  */
 export async function cloneRepoForPR({ owner, repo, prNumber }: CloneParams): Promise<CloneResult> {
@@ -230,8 +235,13 @@ export async function cloneRepoForPR({ owner, repo, prNumber }: CloneParams): Pr
       return { ok: false, reason };
     }
 
+    const headSha = await runGit(['rev-parse', 'HEAD'], tmpDir, timeoutMs);
+    if (!/^[0-9a-f]{40}$/i.test(headSha)) {
+      throw new Error(`git rev-parse HEAD returned an invalid SHA: ${headSha}`);
+    }
+
     logger.info(`[repo-cloner] Clone ready at ${tmpDir}`);
-    return { ok: true, path: tmpDir };
+    return { ok: true, path: tmpDir, headSha };
 
   } catch (err: unknown) {
     // Unexpected error (e.g. mkdtemp failed)

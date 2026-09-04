@@ -14,6 +14,11 @@ import {
   validateVerifiedPonytailFindings,
   validateVerifiedProposalFindings,
 } from './review-draft';
+import {
+  buildRepositorySelectionPrompt,
+  parseRepositorySelection,
+  RepositoryCatalogEntry,
+} from './repository-selection';
 
 export interface ReviewAgentSpawnOptions {
   cwd?: string;
@@ -35,7 +40,7 @@ const MODEL_CAPACITY_BASE_DELAY_MS = 10_000;
  * catch malformed output, policy failures, or any other semantic review error.
  */
 export async function runModelCapacityRetry<T>(
-  stage: 'primary' | 'ponytail' | 'verifier',
+  stage: 'selector' | 'primary' | 'ponytail' | 'verifier',
   invoke: () => Promise<T>,
   options: ModelCapacityRetryOptions = {},
 ): Promise<T> {
@@ -76,6 +81,10 @@ export interface RunReviewVerificationGateArgs {
   isReReview?: boolean;
   previousSha?: string | null;
   reviewMemory?: ReviewMemoryContext;
+  baseBranch?: string;
+  repositoryCatalog?: RepositoryCatalogEntry[];
+  repositoryCatalogPath?: string;
+  refreshSelectedRepositories?: (fullNames: string[]) => Promise<void>;
   capacityRetry?: ModelCapacityRetryOptions;
   spawn: (prompt: string, options?: ReviewAgentSpawnOptions) => Promise<string>;
   publish: (draft: ReviewDraft) => Promise<void>;
@@ -87,6 +96,39 @@ export interface RunReviewVerificationGateArgs {
  * caller receives a publishable review.
  */
 export async function runReviewVerificationGate(args: RunReviewVerificationGateArgs): Promise<ReviewDraft> {
+  let repositoryContext;
+  if (args.clonePath && args.repositoryCatalog?.length && args.repositoryCatalogPath) {
+    const selectionOutput = await runModelCapacityRetry(
+      'selector',
+      () => args.spawn(buildRepositorySelectionPrompt({
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        clonePath: args.clonePath as string,
+        baseBranch: args.baseBranch ?? 'unknown',
+        catalog: args.repositoryCatalog as RepositoryCatalogEntry[],
+        catalogPath: args.repositoryCatalogPath as string,
+      }), { cwd: args.clonePath }),
+      args.capacityRetry,
+    );
+    repositoryContext = parseRepositorySelection(
+      selectionOutput,
+      args.repositoryCatalog,
+      {
+        owner: args.owner,
+        repo: args.repo,
+        clonePath: args.clonePath,
+        baseBranch: args.baseBranch ?? 'unknown',
+      },
+    );
+    const siblings = repositoryContext
+      .filter((repository) => !repository.target)
+      .map((repository) => repository.fullName);
+    if (siblings.length > 0 && args.refreshSelectedRepositories) {
+      await args.refreshSelectedRepositories(siblings);
+    }
+  }
+
   const promptParams = {
     owner: args.owner,
     repo: args.repo,
@@ -95,6 +137,9 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     isReReview: args.isReReview,
     previousSha: args.previousSha,
     reviewMemory: args.reviewMemory,
+    baseBranch: args.baseBranch,
+    repositoryContext,
+    repositoryCatalogPath: args.repositoryCatalogPath,
   };
   const spawnOptions = args.clonePath ? { cwd: args.clonePath } : undefined;
 

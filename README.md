@@ -17,7 +17,16 @@ state/reviewed-prs.json으로 중복 방지
   - 같은 HEAD SHA면 skip
   - 새 commit이면 재리뷰
   ↓
-필요 시 standalone agent용 PR branch를 /tmp에 shallow clone
+프로세스 시작 시 GH_TOKEN으로 접근 가능한 모든 레포를 persistent partial clone
+  - state/repository-cache/<owner>/<repo>
+  - token은 clone remote URL에 저장하지 않음
+  ↓
+대상 PR의 정확한 HEAD를 cache에서 임시 worktree로 준비
+  ↓
+관련 레포 선택 agent가 PR 메타데이터·diff를 보고 초기 탐색 레포 판단
+  - 대상 레포는 항상 포함
+  - API·이벤트·공유 타입 등 구체적 연결이 있는 레포만 추가
+  - 리뷰 중 새 연결이 드러나면 catalog에서 탐색 범위 확장 가능
   ↓
 REVIEW_AGENT에 설정된 agent 실행
   - hermes(work profile) | codex | claude | opencode
@@ -58,9 +67,10 @@ repo lesson은 organization wiki로 자동 승격하지 않음
 - Process manager: PM2 (`pr-reviewer-bot`)
 - Trigger: GitHub Search API polling
 - Review agent: `REVIEW_AGENT`로 선택
-  - 현재 운영값: `hermes` (`HERMES_PROFILE=work`)
   - 지원값: `hermes`, `codex`, `claude`, `opencode`
   - Hermes는 해당 profile의 provider auth/model과 SSH terminal backend를 사용하며, 로컬 clone 대신 원격 `gh` 읽기 경로로 PR을 탐색
+- Repository cache: 시작 시 `GH_TOKEN`으로 접근 가능한 모든 레포를 `state/repository-cache/`에 동기화
+- Repository selector: local clone을 쓰는 agent는 상세 리뷰 전에 관련 레포를 먼저 선택하고, 이후 근거가 생기면 추가 레포를 탐색
 - State file: `state/reviewed-prs.json`
 - Review memory runtime file: `state/review-memory.json` — review comment 논의 원문 archive + repo-scoped curated lesson 저장, git 제외
 - Organization review wiki: `docs/review-wiki/<organization>.md` — 사람이 검토한 동일 GitHub organization 공용 Markdown, source control 포함
@@ -82,6 +92,8 @@ pr-reviewer-bot/
 │   │   ├── polling-reviewer.ts     # retry / permanent skip wrapper
 │   │   ├── review-executor.ts      # PR 리뷰 orchestration
 │   │   ├── repo-cloner.ts          # PR branch temp clone
+│   │   ├── repository-cache.ts      # 접근 가능한 전체 레포 persistent cache + PR worktree
+│   │   ├── repository-selection.ts  # 리뷰 전 관련 레포 선택/검증 계약
 │   │   └── verdict.ts              # agent output verdict 파싱
 │   ├── monitoring/
 │   │   └── comment-reply-monitor.ts # review comment thread 답글 감지/자동 답변
@@ -116,15 +128,18 @@ cp .env.example .env
 | 변수 | 필수 | 설명 |
 |---|---:|---|
 | `DISCORD_WEBHOOK_URL` | ✅ | 리뷰 시작/완료/실패 알림을 보낼 Discord incoming webhook URL |
-| `GH_TOKEN` | 권장 | GitHub API/clone/review 게시용 token. `gh auth`만으로는 일부 clone 경로가 실패할 수 있어 운영에서는 설정 권장 |
+| `GH_TOKEN` | cache 사용 시 필수 | GitHub API/clone/review 게시용 token. 기본 repository cache가 전체 접근 레포를 열거할 때 필요 |
 | `GH_REVIEWER` | ✅ | 봇이 감시할 GitHub reviewer username |
 | `REVIEW_AGENT` | ✅ | 사용할 리뷰 agent. `hermes`, `codex`, `claude`, `opencode` 중 하나 |
 | `HERMES_PROFILE` | 선택 | `REVIEW_AGENT=hermes`일 때 실행할 Hermes profile. 기본 `work`; profile의 model/provider auth와 terminal backend를 사용 |
 | `CODEX_MODEL` | 선택 | `REVIEW_AGENT=codex`일 때 사용할 Codex model. 비우면 Codex CLI 기본값 |
 | `CODEX_REASONING_EFFORT` | 선택 | `REVIEW_AGENT=codex`일 때 `model_reasoning_effort` override. 현재 운영값 `xhigh` |
 | `REVIEW_TIMEOUT_MIN` | 선택 | PR 하나당 agent 실행 timeout, 분 단위 |
-| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 선택 | SIGTERM/SIGINT 후 새 작업을 차단하고 진행 중인 review/reply를 기다리는 최대 시간. 기본은 `REVIEW_TIMEOUT_MIN × 3 + 5`분 |
+| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 선택 | SIGTERM/SIGINT 후 새 작업을 차단하고 진행 중인 review/reply를 기다리는 최대 시간. 기본은 `REVIEW_TIMEOUT_MIN × 4 + 5`분 |
 | `REVIEW_CONCURRENCY` | 선택 | 동시에 리뷰할 PR 개수 |
+| `REPOSITORY_CACHE_ENABLED` | 선택 | 시작 시 `GH_TOKEN`으로 접근 가능한 모든 레포를 미리 clone/fetch. 기본 true |
+| `REPOSITORY_CACHE_DIRECTORY` | 선택 | persistent repository cache와 catalog 위치. 기본 `state/repository-cache` |
+| `REPOSITORY_CACHE_GIT_TIMEOUT_MS` | 선택 | 레포별 clone/fetch timeout. 기본 300000ms |
 | `REPLY_MONITOR_ENABLED` | 선택 | 봇이 남긴 review comment thread에 사람이 답글을 달면 감지/응답할지 여부 |
 | `REPLY_MONITOR_LOOKBACK_DAYS` | 선택 | reply monitor가 스캔할 최근 reviewed PR 범위. 기본 14일 |
 | `REVIEW_MEMORY_ENABLED` | 선택 | 사람 답글 논의를 archive하고 정제된 lesson을 다음 리뷰에 주입할지 여부. 기본 true. false면 raw archive도 쓰지 않음 |
@@ -133,20 +148,13 @@ cp .env.example .env
 | `REVIEW_MEMORY_RAW_MAX_CHARS` | 선택 | raw comment/diff hunk 저장 시 필드별 최대 문자 수. 기본 4000, 최소 100 |
 | `REVIEW_MEMORY_RETENTION_DAYS` | 선택 | raw discussion archive 보관 일수. 기본 180일, 최소 1 |
 
-현재 운영에서는 다음처럼 둡니다.
-
-```ini
-REVIEW_AGENT=hermes
-HERMES_PROFILE=work
-```
-
 > `WEBHOOK_SECRET`는 현재 polling mode에서 사용하지 않습니다.
 
 ---
 
 ## 리뷰 대상 범위
 
-자동 polling 모드에서는 별도의 repository 목록을 설정하지 않습니다. 봇은 GitHub Search API로 다음 조건을 만족하는 PR을 찾습니다.
+자동 polling의 **PR 선택**에는 별도의 repository 목록을 설정하지 않습니다. 봇은 GitHub Search API로 다음 조건을 만족하는 PR을 찾습니다.
 
 - open PR
 - `GH_REVIEWER`에게 review request가 걸려 있음
@@ -154,7 +162,7 @@ HERMES_PROFILE=work
 
 즉, 실제 리뷰 대상은 `GH_REVIEWER` 설정, GitHub review request 상태, `GH_TOKEN` 권한의 교집합으로 결정됩니다.
 
-현재 버전에는 repository allowlist/denylist 기능이 없습니다. 특정 조직이나 repository만 리뷰해야 하는 환경에서는 `GH_TOKEN` 권한을 최소화하거나, allowlist 기능을 추가한 뒤 운영하세요.
+한편 로컬 repository cache의 범위는 시작 시 `GH_TOKEN`으로 `/user/repos`에서 열거되는 모든 owner/collaborator/organization-member 레포입니다. 따라서 팀 운영에서는 토큰 자체가 팀 레포만 볼 수 있도록 권한을 제한해야 합니다. 초기 clone/fetch 중 하나라도 실패하면 polling을 시작하지 않습니다.
 
 ### Discord 수동 트리거
 
@@ -168,16 +176,17 @@ https://github.com/<owner>/<repo>/pull/<number>
 
 ### Cross-repo lookup
 
-리뷰 agent는 API 계약, 공유 타입, sibling service와의 정합성을 확인해야 할 때 같은 GitHub organization의 다른 repository 파일을 일부 조회할 수 있습니다.
+local clone을 사용하는 리뷰 agent는 상세 리뷰 전에 repository selector를 별도 실행합니다. selector는 PR 제목·설명·diff와 전체 cache catalog를 보고 초기 관련 레포를 고릅니다.
 
 기본 지침:
 
-- 전체 repository clone 금지
-- 필요한 파일만 `gh api /contents/...`로 조회
-- PR base branch 기준으로 조회
-- 500KB 초과 파일 조회 금지
+- 전체 접근 가능 레포는 시작 시 미리 partial clone
+- 대상 PR 레포는 정확한 PR HEAD의 임시 worktree 사용
+- 선택된 다른 레포는 PR base와 같은 remote branch를 명시해서 필요한 파일만 조회
+- 초기 선택 후 새 API·이벤트·공유 타입 연결이 발견되면 catalog에서 추가 레포 탐색 가능
+- 공유 cache에서는 checkout/reset/commit/push 및 파일 수정을 금지
 
-접근 가능한 범위는 결국 `GH_TOKEN` 권한에 의해 결정됩니다.
+초기 선택은 탐색 상한선이 아니며, 실제 접근 가능한 범위는 `GH_TOKEN` 권한과 로컬 cache catalog에 의해 결정됩니다. Hermes가 원격 terminal backend를 쓰는 구성에서는 로컬 cache가 보이지 않으므로 기존 `gh` 읽기 경로로 fallback합니다.
 
 ---
 

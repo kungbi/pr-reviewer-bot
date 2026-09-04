@@ -1,5 +1,6 @@
 import { InlineComment, ReviewEvent, ReviewMemoryContext, ReviewVerdict } from '../types';
 import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
+import { buildSelectedRepositoryContextSection, SelectedRepositoryContext } from './repository-selection';
 
 export type DraftSeverity = 'blocker' | 'important' | 'minor';
 export type DraftCommentKind = 'finding' | 'proposal';
@@ -59,6 +60,9 @@ export interface ReviewPromptParams {
   isReReview?: boolean;
   previousSha?: string | null;
   reviewMemory?: ReviewMemoryContext;
+  baseBranch?: string;
+  repositoryContext?: SelectedRepositoryContext[];
+  repositoryCatalogPath?: string;
 }
 
 export interface ReviewVerificationPromptParams extends ReviewPromptParams {
@@ -72,7 +76,8 @@ export interface ReviewPostingPayload {
   replies: DraftReply[];
 }
 
-function buildExplorationSection({ owner, repo, prNumber, clonePath, isReReview, previousSha }: ReviewPromptParams): string {
+function buildExplorationSection(params: ReviewPromptParams): string {
+  const { owner, repo, prNumber, clonePath, isReReview, previousSha } = params;
   const source = clonePath
     ? `현재 작업 디렉토리(\`${clonePath}\`)는 PR 브랜치가 체크아웃된 로컬 clone이다.
 - 변경 파일뿐 아니라 호출자·임포트 체인까지 읽고 영향 범위를 확인해라.
@@ -85,7 +90,13 @@ function buildExplorationSection({ owner, repo, prNumber, clonePath, isReReview,
     ? `\n이 PR은 재리뷰다. ${previousSha ? `이전 리뷰 SHA는 \`${previousSha}\`이므로, 새 변경은 \`git diff ${previousSha}..HEAD\` 또는 PR diff로 먼저 확인해라.` : '지난 리뷰 이후 변경을 먼저 확인해라.'}`
     : '';
 
-  return `${source}${reReview}\nPR: ${owner}/${repo}#${prNumber}`;
+  const repositoryContext = buildSelectedRepositoryContextSection(
+    params.repositoryContext,
+    params.repositoryCatalogPath,
+    params.baseBranch,
+  );
+
+  return `${source}${reReview}\nPR: ${owner}/${repo}#${prNumber}${repositoryContext}`;
 }
 
 function serializeReviewMemoryAdvisory(value: unknown): string {

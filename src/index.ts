@@ -4,6 +4,7 @@ import config from './utils/config';
 import { PollingController, startPolling } from './poller';
 import { startDiscordBot } from './discord-bot';
 import { cleanupStaleClones } from './review/repo-cloner';
+import { getSharedRepositoryCache } from './review/repository-cache';
 import { beginReviewDrain, waitForReviewDrain } from './review/review-executor';
 
 let pollingController: PollingController | undefined;
@@ -16,6 +17,18 @@ async function main(): Promise<void> {
   // Reclaim disk from clones left behind by a previous crashed run.
   // Must finish before polling starts — in-flight clones share the prefix.
   await cleanupStaleClones();
+
+  if (config.repositoryCacheEnabled) {
+    logger.info('[repository-cache] Discovering and synchronizing every repository visible to GH_TOKEN...');
+    const summary = await getSharedRepositoryCache().syncAll();
+    logger.info(
+      `[repository-cache] Sync complete: total=${summary.total}, cloned=${summary.cloned}, ` +
+      `updated=${summary.updated}, failed=${summary.failed.length}`,
+    );
+    if (summary.failed.length > 0) {
+      throw new Error(`Repository cache startup sync failed for ${summary.failed.length} repository/repositories`);
+    }
+  }
 
   pollingController = startPolling(config.pollIntervalMin);
   startDiscordBot();

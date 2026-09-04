@@ -41,7 +41,7 @@ export class ModelCapacityError extends Error {
 
   constructor(
     readonly detail: string,
-    readonly stage?: 'primary' | 'ponytail' | 'verifier',
+    readonly stage?: 'selector' | 'primary' | 'ponytail' | 'verifier',
     readonly attempts?: number,
   ) {
     super(`server_overloaded${stage ? ` at ${stage}` : ''}: ${detail}`);

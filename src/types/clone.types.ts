@@ -11,5 +11,5 @@ export type CloneFailureReason =
   | 'unknown';
 
 export type CloneResult =
-  | { ok: true; path: string }
+  | { ok: true; path: string; headSha?: string }
   | { ok: false; reason: CloneFailureReason };

@@ -111,11 +111,11 @@ if (modelMismatch) {
 }
 
 const reviewTimeoutMin = optionalInt('REVIEW_TIMEOUT_MIN', 20);
-// The pipeline runs primary, Ponytail, and verifier sequentially. Keep enough
-// room for three agent timeouts plus clone/API cleanup before PM2 hard-kills.
+// The local multi-repo pipeline runs selector, primary, Ponytail, and verifier
+// sequentially. Keep enough room for four agent timeouts plus cleanup.
 const shutdownGraceMin = optionalIntAtLeast(
   'SHUTDOWN_GRACE_TIMEOUT_MIN',
-  reviewTimeoutMin * 3 + 5,
+  reviewTimeoutMin * 4 + 5,
   1,
 );
 
@@ -166,6 +166,11 @@ const config = {
   prCloneDepth: optionalInt('PR_CLONE_DEPTH', 200),
   prCloneTimeoutMs: optionalInt('PR_CLONE_TIMEOUT_MS', 90000),
 
+  // Persistent local cache of every repository visible to GH_TOKEN.
+  repositoryCacheEnabled: optionalBool('REPOSITORY_CACHE_ENABLED', true),
+  repositoryCacheDirectory: optional('REPOSITORY_CACHE_DIRECTORY', 'state/repository-cache') as string,
+  repositoryCacheGitTimeoutMs: optionalIntAtLeast('REPOSITORY_CACHE_GIT_TIMEOUT_MS', 300000, 1000),
+
   // Review agent CLI timeout for the review subagent (minutes → ms)
   reviewTimeoutMs: reviewTimeoutMin * 60 * 1000,
 
@@ -211,6 +216,8 @@ if (process.env.NODE_ENV !== 'test') {
   console.log(`  PR_CLONE_ENABLED    : ${config.prCloneEnabled}`);
   console.log(`  PR_CLONE_DEPTH      : ${config.prCloneDepth}`);
   console.log(`  PR_CLONE_TIMEOUT_MS : ${config.prCloneTimeoutMs}`);
+  console.log(`  REPOSITORY_CACHE    : ${config.repositoryCacheEnabled}`);
+  console.log(`  REPOSITORY_CACHE_DIR: ${config.repositoryCacheDirectory}`);
   console.log(`  REVIEW_AGENT        : ${config.reviewAgent}`);
   const reviewModelSource = config.reviewAgent === 'opencode'
     ? 'OPENCODE_MODEL'
