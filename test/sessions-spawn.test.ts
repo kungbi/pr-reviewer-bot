@@ -6,30 +6,45 @@ const parseCodexExecJsonl = (sessionsSpawnModule as typeof sessionsSpawnModule &
 }).parseCodexExecJsonl;
 
 describe('buildReviewAgentEnvironment', () => {
-  it('does not pass local GitHub write credentials to a review agent child process', () => {
+  it('passes the canonical GH_TOKEN only to Codex while removing credential aliases', () => {
     const parentEnvironment = {
       PATH: '/usr/bin:/bin',
       HOME: '/Users/bot',
-      GH_TOKEN: 'local-write-token',
+      GH_TOKEN: 'shared-review-token',
       GITHUB_TOKEN: 'another-write-token',
       GITHUB_PAT: 'pat-token',
       GH_ENTERPRISE_TOKEN: 'enterprise-token',
+      GITHUB_ENTERPRISE_TOKEN: 'github-enterprise-token',
       SAFE_SETTING: 'retained',
     };
 
-    const childEnvironment = buildReviewAgentEnvironment(parentEnvironment);
+    const childEnvironment = buildReviewAgentEnvironment(parentEnvironment, 'codex');
 
     expect(childEnvironment).toMatchObject({
       PATH: '/usr/bin:/bin',
       HOME: '/Users/bot',
+      GH_TOKEN: 'shared-review-token',
       SAFE_SETTING: 'retained',
     });
-    expect(childEnvironment.GH_TOKEN).toBeUndefined();
     expect(childEnvironment.GITHUB_TOKEN).toBeUndefined();
     expect(childEnvironment.GITHUB_PAT).toBeUndefined();
     expect(childEnvironment.GH_ENTERPRISE_TOKEN).toBeUndefined();
-    expect(parentEnvironment.GH_TOKEN).toBe('local-write-token');
+    expect(childEnvironment.GITHUB_ENTERPRISE_TOKEN).toBeUndefined();
+    expect(parentEnvironment.GH_TOKEN).toBe('shared-review-token');
   });
+
+  it.each(['claude', 'opencode', 'hermes'] as const)(
+    'does not pass GH_TOKEN to the %s review agent',
+    (agent) => {
+      const childEnvironment = buildReviewAgentEnvironment(
+        { GH_TOKEN: 'shared-review-token', SAFE_SETTING: 'retained' },
+        agent,
+      );
+
+      expect(childEnvironment.GH_TOKEN).toBeUndefined();
+      expect(childEnvironment.SAFE_SETTING).toBe('retained');
+    },
+  );
 });
 
 describe('parseCodexExecJsonl', () => {

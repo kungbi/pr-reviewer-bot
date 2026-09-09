@@ -7,7 +7,7 @@
  */
 import { spawn } from 'child_process';
 import config from './config';
-import { buildAgentInvocation, buildAgentSpawnPath } from './agent-command';
+import { buildAgentInvocation, buildAgentSpawnPath, type ReviewAgent } from './agent-command';
 
 interface SpawnOptions {
   cwd?: string;
@@ -17,21 +17,28 @@ interface SpawnOptions {
 // Extra grace after the soft timeout before force-killing with SIGKILL.
 const KILL_GRACE_MS = 30_000;
 
-const LOCAL_GITHUB_CREDENTIAL_ENV_NAMES = [
-  'GH_TOKEN',
+const LOCAL_GITHUB_CREDENTIAL_ALIASES = [
   'GITHUB_TOKEN',
   'GITHUB_PAT',
   'GH_ENTERPRISE_TOKEN',
+  'GITHUB_ENTERPRISE_TOKEN',
 ] as const;
 
 /**
- * The review publisher owns local GitHub write credentials. Analysis agents
- * must use only the authentication available in their own configured profile.
+ * Codex intentionally shares the parent's canonical GH_TOKEN so it can inspect
+ * private PR metadata and review threads. Other agents keep their own auth.
+ * Remove alternate credential aliases from every child process.
  */
-export function buildReviewAgentEnvironment(parentEnvironment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildReviewAgentEnvironment(
+  parentEnvironment: NodeJS.ProcessEnv,
+  agent: ReviewAgent,
+): NodeJS.ProcessEnv {
   const childEnvironment = { ...parentEnvironment };
-  for (const name of LOCAL_GITHUB_CREDENTIAL_ENV_NAMES) {
+  for (const name of LOCAL_GITHUB_CREDENTIAL_ALIASES) {
     delete childEnvironment[name];
+  }
+  if (agent !== 'codex') {
+    delete childEnvironment.GH_TOKEN;
   }
   return childEnvironment;
 }
@@ -129,7 +136,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: timeoutMs,
       env: {
-        ...buildReviewAgentEnvironment(process.env),
+        ...buildReviewAgentEnvironment(process.env, config.reviewAgent),
         PATH: buildAgentSpawnPath(process.env.PATH, process.env.HOME),
       },
     };

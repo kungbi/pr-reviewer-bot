@@ -128,7 +128,7 @@ cp .env.example .env
 | 변수 | 필수 | 설명 |
 |---|---:|---|
 | `DISCORD_WEBHOOK_URL` | ✅ | 리뷰 시작/완료/실패 알림을 보낼 Discord incoming webhook URL |
-| `GH_TOKEN` | cache 사용 시 필수 | GitHub API/clone/review 게시용 token. 기본 repository cache가 전체 접근 레포를 열거할 때 필요 |
+| `GH_TOKEN` | cache 사용 시 필수 | GitHub API/clone/review 게시용 token. `REVIEW_AGENT=codex`에서는 private PR 문맥 조회를 위해 Codex child에도 같은 권한으로 전달되므로 최소 권한 token을 권장 |
 | `GH_REVIEWER` | ✅ | 봇이 감시할 GitHub reviewer username |
 | `REVIEW_AGENT` | ✅ | 사용할 리뷰 agent. `hermes`, `codex`, `claude`, `opencode` 중 하나 |
 | `HERMES_PROFILE` | 선택 | `REVIEW_AGENT=hermes`일 때 실행할 Hermes profile. 기본 `work`; profile의 model/provider auth와 terminal backend를 사용 |

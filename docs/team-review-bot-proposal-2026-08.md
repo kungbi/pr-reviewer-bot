@@ -221,7 +221,7 @@ GitHub token, Discord webhook, bot token 같은 secret 값은 문서·로그·�
 
 - 각 세션의 역할 계약은 GitHub POST 금지·후보 JSON만 반환이며, Hermes에는 terminal tool만 노출한다.
 - Hermes `work` profile은 로컬 PR clone 대신 해당 backend에서 인증된 `gh`의 **읽기(GET) 탐색 정책**으로 PR·diff·관련 파일을 확인한다.
-- 분석 child process에는 로컬 publisher의 `GH_TOKEN`/`GITHUB_TOKEN` 같은 GitHub write credential을 전달하지 않는다. 다만 profile 자체의 GitHub 권한도 전용 운영 전환 시 read-only 최소 권한으로 별도 분리해야 한다.
+- 분석 child process에는 기본적으로 로컬 publisher의 GitHub credential을 전달하지 않는다. 현재 `REVIEW_AGENT=codex` 구성만 private PR 문맥 조회를 위해 canonical `GH_TOKEN`을 공유하고 다른 credential alias는 제거한다. 이 경우 Codex는 publisher와 같은 GitHub 권한을 가지므로 최소 권한 token을 권장한다.
 - 마지막 publisher만 검증 통과 결과를 GitHub에 쓴다.
 
 #### “스킬”은 현재 어떻게 쓰는가
