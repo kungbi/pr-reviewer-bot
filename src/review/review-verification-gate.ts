@@ -6,10 +6,13 @@ import { ModelCapacityError } from '../utils/sessions_spawn';
 import {
   buildPonytailReviewPrompt,
   buildReviewDraftPrompt,
+  buildReviewRecallPrompt,
   buildReviewVerificationPrompt,
   mergeReviewDrafts,
   parsePonytailReviewDraft,
+  parseRecallReviewDraft,
   parseReviewDraft,
+  parseVerifiedReviewDraft,
   ReviewDraft,
   validateVerifiedPonytailFindings,
   validateVerifiedProposalFindings,
@@ -40,7 +43,7 @@ const MODEL_CAPACITY_BASE_DELAY_MS = 10_000;
  * catch malformed output, policy failures, or any other semantic review error.
  */
 export async function runModelCapacityRetry<T>(
-  stage: 'selector' | 'primary' | 'ponytail' | 'verifier',
+  stage: 'selector' | 'primary' | 'recall' | 'ponytail' | 'verifier',
   invoke: () => Promise<T>,
   options: ModelCapacityRetryOptions = {},
 ): Promise<T> {
@@ -149,6 +152,25 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     args.capacityRetry,
   );
   const primaryCandidate = parseReviewDraft(primaryOutput);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=primary, inline=${primaryCandidate.comments.length}, replies=${primaryCandidate.replies.length}`,
+  );
+
+  let correctnessCandidate = primaryCandidate;
+  if (primaryCandidate.comments.length === 0 && primaryCandidate.replies.length === 0) {
+    const recallOutput = await runModelCapacityRetry(
+      'recall',
+      () => args.spawn(buildReviewRecallPrompt(promptParams), spawnOptions),
+      args.capacityRetry,
+    );
+    const recallCandidate = parseRecallReviewDraft(recallOutput);
+    logger.info(
+      `[ReviewVerificationGate] candidate counts: stage=recall, inline=${recallCandidate.comments.length}, replies=${recallCandidate.replies.length}`,
+    );
+    correctnessCandidate = mergeReviewDrafts(primaryCandidate, recallCandidate);
+  } else {
+    logger.info('[ReviewVerificationGate] candidate counts: stage=recall, skipped=primary_non_empty');
+  }
 
   const ponytailOutput = await runModelCapacityRetry(
     'ponytail',
@@ -156,7 +178,13 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     args.capacityRetry,
   );
   const ponytailCandidate = parsePonytailReviewDraft(ponytailOutput);
-  const candidate = mergeReviewDrafts(primaryCandidate, ponytailCandidate);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=ponytail, inline=${ponytailCandidate.comments.length}, replies=${ponytailCandidate.replies.length}`,
+  );
+  const candidate = mergeReviewDrafts(correctnessCandidate, ponytailCandidate);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=merged, inline=${candidate.comments.length}, replies=${candidate.replies.length}`,
+  );
 
   const verificationOutput = await runModelCapacityRetry(
     'verifier',
@@ -164,10 +192,13 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     args.capacityRetry,
   );
   const verifiedDraft = validateVerifiedProposalFindings(
-    parseReviewDraft(verificationOutput),
+    parseVerifiedReviewDraft(verificationOutput),
     candidate,
   );
   const verified = validateVerifiedPonytailFindings(verifiedDraft, candidate);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=verified, inline=${verified.comments.length}, replies=${verified.replies.length}`,
+  );
 
   await args.publish(verified);
   return verified;

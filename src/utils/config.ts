@@ -111,11 +111,11 @@ if (modelMismatch) {
 }
 
 const reviewTimeoutMin = optionalInt('REVIEW_TIMEOUT_MIN', 20);
-// The local multi-repo pipeline runs selector, primary, Ponytail, and verifier
-// sequentially. Keep enough room for four agent timeouts plus cleanup.
+// The local multi-repo pipeline can run selector, primary, recall, Ponytail,
+// and verifier sequentially. Keep enough room for five agent timeouts plus cleanup.
 const shutdownGraceMin = optionalIntAtLeast(
   'SHUTDOWN_GRACE_TIMEOUT_MIN',
-  reviewTimeoutMin * 4 + 5,
+  reviewTimeoutMin * 5 + 5,
   1,
 );
 

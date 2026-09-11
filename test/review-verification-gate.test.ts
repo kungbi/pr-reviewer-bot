@@ -10,6 +10,20 @@ const runModelCapacityRetry = (verificationGateModule as typeof verificationGate
   ) => Promise<T>;
 }).runModelCapacityRetry;
 
+function verifiedJson(draft: { summary: string; comments: object[]; replies: object[] }): string {
+  return JSON.stringify({
+    ...draft,
+    comments: draft.comments.map((comment) => ({
+      ...comment,
+      verification: { confidence: 'confirmed' },
+    })),
+    replies: draft.replies.map((reply) => ({
+      ...reply,
+      verification: { confidence: 'confirmed' },
+    })),
+  });
+}
+
 describe('runReviewVerificationGate', () => {
   const firstDraft = JSON.stringify({
     summary: '1차 후보',
@@ -23,7 +37,7 @@ describe('runReviewVerificationGate', () => {
     comments: [],
     replies: [],
   });
-  const verifiedDraft = JSON.stringify({
+  const verifiedDraft = verifiedJson({
     summary: '검증 통과: 실제 오류 처리 누락',
     comments: [{
       path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.',
@@ -52,6 +66,51 @@ describe('runReviewVerificationGate', () => {
     expect(publish).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ summary: '검증 통과: 실제 오류 처리 누락' }));
     expect(result.summary).toBe('검증 통과: 실제 오류 처리 누락');
+  });
+
+  it('runs an independent correctness recall pass before approving an empty primary draft', async () => {
+    const emptyPrimary = JSON.stringify({
+      summary: '1차에서 후보를 찾지 못했습니다.',
+      comments: [],
+      replies: [],
+    });
+    const recalled = JSON.stringify({
+      summary: '누락 탐지 후보 1건',
+      comments: [{
+        path: 'src/worker.ts', line: 70, side: 'RIGHT', severity: 'important', kind: 'finding',
+        body: '순차 작업의 전체 시간 예산이 HTTP timeout을 넘을 수 있습니다.',
+      }],
+      replies: [],
+    });
+    const verifiedRecall = verifiedJson({
+      summary: '누락 탐지 후보를 검증했습니다.',
+      comments: [{
+        path: 'src/worker.ts', line: 70, side: 'RIGHT', severity: 'important', kind: 'finding',
+        body: '순차 작업의 전체 시간 예산이 HTTP timeout을 넘을 수 있습니다.',
+      }],
+      replies: [],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(emptyPrimary)
+      .mockResolvedValueOnce(recalled)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(verifiedRecall);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    const result = await runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo', spawn, publish,
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn.mock.calls[0][0]).toContain('1차 코드 리뷰어');
+    expect(spawn.mock.calls[1][0]).toContain('독립 누락 탐지 리뷰어');
+    expect(spawn.mock.calls[2][0]).toContain('Ponytail');
+    expect(spawn.mock.calls[3][0]).toContain('독립 검증자');
+    expect(spawn.mock.calls[3][0]).toContain('순차 작업의 전체 시간 예산이 HTTP timeout을 넘을 수 있습니다.');
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      comments: [expect.objectContaining({ path: 'src/worker.ts', line: 70 })],
+    }));
+    expect(result.comments).toHaveLength(1);
   });
 
   it('selects initial repository context before drafting and refreshes the selected sibling repositories', async () => {
@@ -106,7 +165,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const verifiedCombined = JSON.stringify({
+    const verifiedCombined = verifiedJson({
       summary: '검증 통과',
       comments: [
         { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
@@ -147,7 +206,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const reclassified = JSON.stringify({
+    const reclassified = verifiedJson({
       summary: '검증 통과',
       comments: [{
         path: 'src/adapter.ts', line: 21, side: 'RIGHT', severity: 'minor', kind: 'finding',
@@ -169,7 +228,7 @@ describe('runReviewVerificationGate', () => {
   });
 
   it('does not publish when verification downgrades a finding to a proposal', async () => {
-    const downgraded = JSON.stringify({
+    const downgraded = verifiedJson({
       summary: '검증 통과',
       comments: [{
         path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'minor', kind: 'proposal',
@@ -205,7 +264,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const escalated = JSON.stringify({
+    const escalated = verifiedJson({
       summary: '검증 통과',
       comments: [
         { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
@@ -234,7 +293,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const untagged = JSON.stringify({
+    const untagged = verifiedJson({
       summary: '검증 통과',
       comments: [
         { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
@@ -272,9 +331,21 @@ describe('runReviewVerificationGate', () => {
 
 describe('capacity recovery in review gate', () => {
   it('retries a failed Ponytail pass without rerunning the completed primary pass', async () => {
-    const primary = JSON.stringify({ summary: 'primary', comments: [], replies: [] });
+    const primary = JSON.stringify({
+      summary: 'primary',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: 'candidate',
+      }],
+      replies: [],
+    });
     const ponytail = JSON.stringify({ summary: 'lean', comments: [], replies: [] });
-    const verified = JSON.stringify({ summary: 'verified', comments: [], replies: [] });
+    const verified = verifiedJson({
+      summary: 'verified',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: 'candidate',
+      }],
+      replies: [],
+    });
     const spawn = jest.fn()
       .mockResolvedValueOnce(primary)
       .mockRejectedValueOnce(new ModelCapacityError('temporary capacity'))

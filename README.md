@@ -31,7 +31,9 @@ state/reviewed-prs.json으로 중복 방지
 REVIEW_AGENT에 설정된 agent 실행
   - hermes(work profile) | codex | claude | opencode
   ↓
-봇이 독립 검증을 통과한 draft만 GitHub review / inline comments로 게시
+봇이 빈 1차 결과를 독립 recall로 재검토하고, verifier가 모든 후보에 confirmed/uncertain을 표시
+  - uncertain이면 확인하지 못한 이유를 코멘트에 포함하고 자동 REQUEST_CHANGES에는 사용하지 않음
+  - 코드 gate가 후보 원문·좌표 불변과 전수 반환을 검사한 뒤 GitHub review / inline comments로 게시
   ↓
 봇이 review 게시 여부 확인
   ↓
@@ -133,9 +135,9 @@ cp .env.example .env
 | `REVIEW_AGENT` | ✅ | 사용할 리뷰 agent. `hermes`, `codex`, `claude`, `opencode` 중 하나 |
 | `HERMES_PROFILE` | 선택 | `REVIEW_AGENT=hermes`일 때 실행할 Hermes profile. 기본 `work`; profile의 model/provider auth와 terminal backend를 사용 |
 | `CODEX_MODEL` | 선택 | `REVIEW_AGENT=codex`일 때 사용할 Codex model. 비우면 Codex CLI 기본값 |
-| `CODEX_REASONING_EFFORT` | 선택 | `REVIEW_AGENT=codex`일 때 `model_reasoning_effort` override. 현재 운영값 `xhigh` |
+| `CODEX_REASONING_EFFORT` | 선택 | `REVIEW_AGENT=codex`일 때 `model_reasoning_effort` override. 현재 운영값 `high` |
 | `REVIEW_TIMEOUT_MIN` | 선택 | PR 하나당 agent 실행 timeout, 분 단위 |
-| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 선택 | SIGTERM/SIGINT 후 새 작업을 차단하고 진행 중인 review/reply를 기다리는 최대 시간. 기본은 `REVIEW_TIMEOUT_MIN × 4 + 5`분 |
+| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 선택 | SIGTERM/SIGINT 후 새 작업을 차단하고 진행 중인 review/reply를 기다리는 최대 시간. 기본은 `REVIEW_TIMEOUT_MIN × 5 + 5`분 |
 | `REVIEW_CONCURRENCY` | 선택 | 동시에 리뷰할 PR 개수 |
 | `REPOSITORY_CACHE_ENABLED` | 선택 | 시작 시 `GH_TOKEN`으로 접근 가능한 모든 레포를 미리 clone/fetch. 기본 true |
 | `REPOSITORY_CACHE_DIRECTORY` | 선택 | persistent repository cache와 catalog 위치. 기본 `state/repository-cache` |
@@ -225,7 +227,7 @@ set +a
 npx pm2 restart pr-reviewer-bot --update-env
 ```
 
-재시작 신호를 받으면 cron·Discord의 새 리뷰 요청을 차단하고, 이미 시작한 draft·Ponytail·verifier·게시·reply-monitor 작업을 끝까지 기다립니다. 기본 대기 시간은 `REVIEW_TIMEOUT_MIN × 3 + 5`분이며, 시간을 넘기면 오류 종료 후 PM2의 4시간 hard-kill 한도가 최종 보호 장치가 됩니다.
+재시작 신호를 받으면 cron·Discord의 새 리뷰 요청을 차단하고, 이미 시작한 selector·draft·recall·Ponytail·verifier·게시·reply-monitor 작업을 끝까지 기다립니다. 기본 대기 시간은 `REVIEW_TIMEOUT_MIN × 5 + 5`분이며, 시간을 넘기면 오류 종료 후 PM2의 5시간 hard-kill 한도가 최종 보호 장치가 됩니다.
 
 상태 확인:
 
