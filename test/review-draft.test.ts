@@ -489,12 +489,12 @@ describe('review draft verification gate', () => {
     const posting = prepareReviewForPosting(verified);
 
     expect(posting.body).toContain('🔴 **Blocker 1건** · 🟡 **Important 1건** · 🟢 **Minor 1건**');
-    expect(posting.comments[0].body).toMatch(/^> \[!CAUTION\]\n> 음수 page를 차단하지 않습니다\./);
-    expect(posting.comments[1].body).toMatch(/^> \[!IMPORTANT\]\n> 실패를 무시하고 있습니다\./);
-    expect(posting.comments[2].body).toMatch(/^> \[!NOTE\]\n> 운영 로그에 요청 식별자가 없습니다\./);
+    expect(posting.comments[0].body).toMatch(/^🔴 \*\*Blocker\*\* — 음수 page를 차단하지 않습니다\./);
+    expect(posting.comments[1].body).toMatch(/^🟡 \*\*Important\*\* — 실패를 무시하고 있습니다\./);
+    expect(posting.comments[2].body).toMatch(/^🟢 \*\*Minor\*\* — 운영 로그에 요청 식별자가 없습니다\./);
   });
 
-  it('renders Ponytail simplification findings as a GitHub TIP alert', () => {
+  it('renders Ponytail simplification findings with a standard Minor heading', () => {
     const posting = prepareReviewForPosting({
       summary: '복잡성 개선 후보가 있습니다.',
       comments: [{
@@ -505,7 +505,7 @@ describe('review draft verification gate', () => {
     });
 
     expect(posting.comments[0].body).toMatch(
-      /^> \[!TIP\]\n> yagni: 구현체 하나뿐인 인터페이스입니다\. 직접 주입으로 대체하세요\./,
+      /^🟢 \*\*Minor\*\* — yagni: 구현체 하나뿐인 인터페이스입니다\. 직접 주입으로 대체하세요\./,
     );
   });
 

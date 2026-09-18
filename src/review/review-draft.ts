@@ -20,12 +20,6 @@ const SEVERITY_PRESENTATION: Record<DraftSeverity, string> = {
   minor: '🟢 **Minor**',
 };
 
-const SEVERITY_ALERT: Record<DraftSeverity, 'CAUTION' | 'IMPORTANT' | 'NOTE'> = {
-  blocker: 'CAUTION',
-  important: 'IMPORTANT',
-  minor: 'NOTE',
-};
-
 const LEADING_SEVERITY_LABEL = /^(?:🔴|🟡|🟢)?\s*(?:\*\*)?(?:Blocker|Important|Minor)(?:\*\*)?\s*(?:—|-|:)\s*/i;
 const PONYTAIL_TAG = /^(?:delete|stdlib|native|yagni|shrink):\s*/i;
 
@@ -195,6 +189,7 @@ ${buildExplorationSection(params)}${buildReviewMemorySection(params.reviewMemory
 
 - kind: "proposal"은 항상 severity: "minor"이며 proposal.proposal/benefit/risk/convention/scope를 모두 채운다. kind: "finding"은 proposal을 넣지 않는다.
 - footer/작성자 표시는 넣지 마라. 게시 프로세스가 강제 추가한다.
+- body에는 읽기 쉬운 Markdown을 사용한다. 결론/영향/수정 요구 같은 짧은 레이블만 **굵게** 표시하고, 파일명·함수명·필드명·API 키·값은 \`인라인 코드\`로 감싼다. 전체를 인용문(\`>\`)으로 감싸거나, 빈 인용문 줄을 만들지 마라. 긴 파일 경로는 본문에서 반복하지 말고 필요한 경우 파일명과 라인만 쓴다.
 - comments/replies가 없으면 빈 배열을 반환한다.
 - replies도 최종 리뷰의 이슈 집계와 승인 이벤트에 반영된다. 기존 스레드에 추가하는 내용이 버그/위험이면 해당 severity를 반드시 지정하고, 단순 감사·확인 답글은 후보에 넣지 마라.
 - 이슈를 발견하지 못한 것은 실패가 아니다. 억지로 채우지 마라.`;
@@ -601,11 +596,7 @@ function formatReviewCommentBody(comment: DraftComment): string {
   const rationale = comment.kind === 'proposal' && comment.proposal
     ? `\n\n${formatProposalRationale(comment.proposal)}`
     : '';
-  const alert = comment.kind === 'proposal' || PONYTAIL_TAG.test(withoutExistingLabel)
-    ? 'TIP'
-    : SEVERITY_ALERT[comment.severity];
-  const quotedBody = `${withoutExistingLabel}${rationale}`.replace(/\n/g, '\n> ');
-  return `> [!${alert}]\n> ${quotedBody}`;
+  return `${SEVERITY_PRESENTATION[comment.severity]} — ${withoutExistingLabel}${rationale}`;
 }
 
 export function getReviewEvent(draft: ReviewDraft): ReviewEvent {
