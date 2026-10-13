@@ -1,6 +1,7 @@
 jest.mock('../src/github', () => ({
   getPRDetails: jest.fn(),
   getPRHeadSha: jest.fn(),
+  listReviewThreads: jest.fn(),
   postInlineReview: jest.fn(),
   postReviewCommentReply: jest.fn(),
   verifyReviewPosted: jest.fn(),
@@ -29,7 +30,7 @@ jest.mock('../src/discord-notifier', () => ({
 }));
 
 import { executeReview } from '../src/review/review-executor';
-import { getPRDetails, getPRHeadSha, postInlineReview, verifyReviewPosted } from '../src/github';
+import { getPRDetails, getPRHeadSha, listReviewThreads, postInlineReview, verifyReviewPosted } from '../src/github';
 import { runReviewVerificationGate } from '../src/review/review-verification-gate';
 import { cloneRepoForPR } from '../src/review/repo-cloner';
 import { getSharedRepositoryCache } from '../src/review/repository-cache';
@@ -37,6 +38,7 @@ import ReviewedPRsState from '../src/utils/state-manager';
 
 const mockGetPRDetails = getPRDetails as jest.Mock;
 const mockGetPRHeadSha = getPRHeadSha as jest.Mock;
+const mockListReviewThreads = listReviewThreads as jest.Mock;
 const mockVerifyReviewPosted = verifyReviewPosted as jest.Mock;
 const mockPostInlineReview = postInlineReview as jest.Mock;
 const mockRunReviewVerificationGate = runReviewVerificationGate as jest.Mock;
@@ -47,6 +49,7 @@ describe('executeReview persistent repository cache integration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetPRHeadSha.mockResolvedValue('head-sha');
+    mockListReviewThreads.mockResolvedValue([]);
     mockGetPRDetails.mockResolvedValue({
       title: 'Cross-repo contract',
       url: 'https://github.com/org/api/pull/123',
@@ -90,6 +93,7 @@ describe('executeReview persistent repository cache integration', () => {
     expect(mockRunReviewVerificationGate).toHaveBeenCalledWith(expect.objectContaining({
       clonePath: '/tmp/pr-worktree',
       baseBranch: 'main',
+      reviewThreads: [],
       repositoryCatalog: cache.getCatalog(),
       repositoryCatalogPath: '/cache/repositories.json',
       refreshSelectedRepositories: expect.any(Function),

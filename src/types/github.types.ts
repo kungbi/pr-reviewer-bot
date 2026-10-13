@@ -36,6 +36,27 @@ export interface ReviewComment {
   updated_at?: string;
 }
 
+export interface ReviewThreadComment {
+  id: number;
+  body: string;
+  user: { login: string } | null;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+  inReplyToId: number | null;
+}
+
+export interface ReviewThread {
+  id: string;
+  rootCommentId: number;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string | null;
+  line: number | null;
+  originalLine: number | null;
+  comments: ReviewThreadComment[];
+}
+
 export type RepositoryPermission = 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none';
 
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';

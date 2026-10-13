@@ -11,6 +11,25 @@ const runModelCapacityRetry = (verificationGateModule as typeof verificationGate
 }).runModelCapacityRetry;
 
 describe('runReviewVerificationGate', () => {
+  const unresolvedThread = {
+    id: 'PRRT_thread',
+    rootCommentId: 4243959293,
+    isResolved: false,
+    isOutdated: false,
+    path: 'src/service.ts',
+    line: 42,
+    originalLine: 40,
+    comments: [{
+      id: 4243959293,
+      body: '🟢 Minor — 기존 지적입니다.',
+      user: { login: 'reviewer' },
+      createdAt: '2026-10-12T00:00:00.000Z',
+      updatedAt: '2026-10-12T00:00:00.000Z',
+      url: 'https://github.com/org/repo/pull/123#discussion_r4243959293',
+      inReplyToId: null,
+    }],
+  };
+
   const firstDraft = JSON.stringify({
     summary: '1차 후보',
     comments: [{
@@ -52,6 +71,63 @@ describe('runReviewVerificationGate', () => {
     expect(publish).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({ summary: '검증 통과: 실제 오류 처리 누락' }));
     expect(result.summary).toBe('검증 통과: 실제 오류 처리 누락');
+  });
+
+  it('fails closed if the primary reviewer omits an unresolved review thread assessment', async () => {
+    const noAssessment = JSON.stringify({ summary: '이슈 없음', comments: [], replies: [], existingFindings: [] });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(noAssessment)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(noAssessment);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const args = {
+      owner: 'org', repo: 'repo', prNumber: 123, reviewThreads: [unresolvedThread], spawn, publish,
+    } as Parameters<typeof runReviewVerificationGate>[0] & { reviewThreads: unknown[] };
+
+    await expect(runReviewVerificationGate(args)).rejects.toThrow('every unresolved review thread');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('holds for human judgment when primary and verifier disagree about an existing finding', async () => {
+    const primary = JSON.stringify({
+      summary: '기존 지적은 여전히 유효합니다.',
+      comments: [],
+      replies: [],
+      existingFindings: [{
+        commentId: 4243959293,
+        status: 'still_applies',
+        severity: 'important',
+        body: '현재 코드에서 영향이 계속 발생합니다.',
+      }],
+    });
+    const verifier = JSON.stringify({
+      summary: '기존 지적 상태를 독립 검증했습니다.',
+      comments: [],
+      replies: [],
+      existingFindings: [{
+        commentId: 4243959293,
+        status: 'fixed_in_code',
+        severity: null,
+        body: '현재 구현에서는 지적된 경로가 제거됐습니다.',
+      }],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(primary)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(verifier);
+    const publish = jest.fn().mockResolvedValue(undefined);
+    const args = {
+      owner: 'org', repo: 'repo', prNumber: 123, reviewThreads: [unresolvedThread], spawn, publish,
+    } as Parameters<typeof runReviewVerificationGate>[0] & { reviewThreads: unknown[] };
+
+    const result = await runReviewVerificationGate(args);
+
+    expect(result).toMatchObject({
+      existingFindings: [{ commentId: 4243959293, status: 'uncertain', severity: null }],
+    });
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      existingFindings: [expect.objectContaining({ status: 'uncertain' })],
+    }));
   });
 
   it('selects initial repository context before drafting and refreshes the selected sibling repositories', async () => {

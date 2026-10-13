@@ -7,7 +7,7 @@ import axios from 'axios';
 import logger from './utils/logger';
 import config from './utils/config';
 import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from './utils/errors';
-import { PRDetails, InlineComment, RepositoryPermission, ReviewComment, ReviewEvent } from './types';
+import { PRDetails, InlineComment, RepositoryPermission, ReviewComment, ReviewEvent, ReviewThread, ReviewThreadComment } from './types';
 
 const GH_API = 'https://api.github.com';
 
@@ -139,6 +139,216 @@ const listReviewComments = createRetryFunction(async (owner: unknown, repo: unkn
 
   return all;
 }, 3, 1000) as (owner: string, repo: string, prNumber: number) => Promise<ReviewComment[]>;
+
+const REVIEW_THREADS_QUERY = `query ListPullRequestReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          originalLine
+          comments(first: 100) {
+            nodes {
+              databaseId
+              body
+              author { login }
+              createdAt
+              updatedAt
+              url
+              replyTo { databaseId }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+const REVIEW_THREAD_COMMENTS_QUERY = `query ListPullRequestReviewThreadComments($threadId: ID!, $cursor: String!) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $cursor) {
+        nodes {
+          databaseId
+          body
+          author { login }
+          createdAt
+          updatedAt
+          url
+          replyTo { databaseId }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+interface GraphQLConnection<T> {
+  nodes?: T[];
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+}
+
+interface GraphQLReviewComment {
+  databaseId?: number | null;
+  body?: string | null;
+  author?: { login?: string | null } | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  url?: string | null;
+  replyTo?: { databaseId?: number | null } | null;
+}
+
+interface GraphQLReviewThread {
+  id?: string | null;
+  isResolved?: boolean;
+  isOutdated?: boolean;
+  path?: string | null;
+  line?: number | null;
+  originalLine?: number | null;
+  comments?: GraphQLConnection<GraphQLReviewComment> | null;
+}
+
+interface GraphQLReviewThreadPage {
+  repository?: {
+    pullRequest?: {
+      reviewThreads?: GraphQLConnection<GraphQLReviewThread> | null;
+    } | null;
+  } | null;
+}
+
+interface GraphQLThreadCommentsPage {
+  node?: {
+    comments?: GraphQLConnection<GraphQLReviewComment> | null;
+  } | null;
+}
+
+async function postGraphQLQuery<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  const res = await axios.post(`${GH_API}/graphql`, { query, variables }, { headers: getHeaders() });
+  checkRateLimit(res.headers as Record<string, string>);
+  const payload = res.data as { data?: T; errors?: Array<{ message?: string }> };
+  if (payload.errors?.length) {
+    const messages = payload.errors.map((error) => error.message ?? 'unknown GraphQL error');
+    throw new Error(`GitHub GraphQL review-thread query failed: ${messages.join('; ')}`);
+  }
+  if (!payload.data) throw new Error('GitHub GraphQL review-thread query returned no data');
+  return payload.data;
+}
+
+function requireConnection<T>(value: GraphQLConnection<T> | null | undefined, name: string): {
+  nodes: T[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+} {
+  if (!value || !Array.isArray(value.nodes) || typeof value.pageInfo?.hasNextPage !== 'boolean') {
+    throw new Error(`GitHub GraphQL review-thread response is missing ${name}`);
+  }
+  return {
+    nodes: value.nodes,
+    hasNextPage: value.pageInfo.hasNextPage,
+    endCursor: typeof value.pageInfo.endCursor === 'string' ? value.pageInfo.endCursor : null,
+  };
+}
+
+function normalizeReviewThreadComment(comment: GraphQLReviewComment): ReviewThreadComment {
+  if (!Number.isSafeInteger(comment.databaseId) || (comment.databaseId as number) < 1) {
+    throw new Error('GitHub GraphQL review-thread comment is missing a database ID');
+  }
+  return {
+    id: comment.databaseId as number,
+    body: typeof comment.body === 'string' ? comment.body : '',
+    user: typeof comment.author?.login === 'string' ? { login: comment.author.login } : null,
+    createdAt: typeof comment.createdAt === 'string' ? comment.createdAt : '',
+    updatedAt: typeof comment.updatedAt === 'string' ? comment.updatedAt : '',
+    url: typeof comment.url === 'string' ? comment.url : '',
+    inReplyToId: Number.isSafeInteger(comment.replyTo?.databaseId)
+      ? comment.replyTo?.databaseId as number
+      : null,
+  };
+}
+
+async function listAllReviewThreadComments(
+  threadId: string,
+  initialConnection: GraphQLConnection<GraphQLReviewComment> | null | undefined,
+): Promise<ReviewThreadComment[]> {
+  const firstPage = requireConnection(initialConnection, 'thread comments');
+  const comments = firstPage.nodes.map(normalizeReviewThreadComment);
+  let hasNextPage = firstPage.hasNextPage;
+  let cursor = firstPage.endCursor;
+
+  while (hasNextPage) {
+    if (!cursor) throw new Error('GitHub GraphQL review-thread comments page is missing its cursor');
+    const data = await postGraphQLQuery<GraphQLThreadCommentsPage>(REVIEW_THREAD_COMMENTS_QUERY, {
+      threadId,
+      cursor,
+    });
+    const connection = requireConnection(data.node?.comments, 'thread comment page');
+    comments.push(...connection.nodes.map(normalizeReviewThreadComment));
+    hasNextPage = connection.hasNextPage;
+    cursor = connection.endCursor;
+  }
+
+  return comments;
+}
+
+/**
+ * Fetch every PR review thread with GitHub's authoritative resolved/outdated
+ * flags and all comments/replies. A missing or partial GraphQL response fails
+ * closed so an unresolved finding cannot silently disappear from the review.
+ */
+const listReviewThreads = async (owner: string, repo: string, prNumber: number): Promise<ReviewThread[]> => {
+  logger.info(`Listing review thread status: ${owner}/${repo}#${prNumber}`);
+  const threads: ReviewThread[] = [];
+  let cursor: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const data: GraphQLReviewThreadPage = await postGraphQLQuery<GraphQLReviewThreadPage>(REVIEW_THREADS_QUERY, {
+      owner,
+      repo,
+      number: prNumber,
+      cursor,
+    });
+    const connection: ReturnType<typeof requireConnection<GraphQLReviewThread>> = requireConnection<GraphQLReviewThread>(
+      data.repository?.pullRequest?.reviewThreads,
+      'review threads',
+    );
+
+    for (const thread of connection.nodes) {
+      if (typeof thread.id !== 'string'
+        || typeof thread.isResolved !== 'boolean'
+        || typeof thread.isOutdated !== 'boolean') {
+        throw new Error('GitHub GraphQL review-thread response is missing ID or status flags');
+      }
+      const comments = await listAllReviewThreadComments(thread.id, thread.comments);
+      const root = comments.find((comment) => comment.inReplyToId === null);
+      if (!root) throw new Error(`GitHub GraphQL review thread ${thread.id} has no root comment`);
+      threads.push({
+        id: thread.id,
+        rootCommentId: root.id,
+        isResolved: thread.isResolved,
+        isOutdated: thread.isOutdated,
+        path: typeof thread.path === 'string' ? thread.path : null,
+        line: Number.isInteger(thread.line) ? thread.line as number : null,
+        originalLine: Number.isInteger(thread.originalLine) ? thread.originalLine as number : null,
+        comments,
+      });
+    }
+
+    hasNextPage = connection.hasNextPage;
+    cursor = connection.endCursor;
+    if (hasNextPage && !cursor) {
+      throw new Error('GitHub GraphQL review-thread page is missing its cursor');
+    }
+  }
+
+  return threads;
+};
 
 const VALID_REPOSITORY_PERMISSIONS: RepositoryPermission[] = ['admin', 'maintain', 'write', 'triage', 'read', 'none'];
 
@@ -281,6 +491,7 @@ export {
   getPRDiff,
   postComment,
   listReviewComments,
+  listReviewThreads,
   getRepositoryPermission,
   postReviewCommentReply,
   postReview,

@@ -1,4 +1,4 @@
-import { ReviewMemoryContext } from '../types';
+import { ReviewMemoryContext, ReviewThread } from '../types';
 import config from '../utils/config';
 import { sleep } from '../utils/errors';
 import logger from '../utils/logger';
@@ -10,9 +10,11 @@ import {
   mergeReviewDrafts,
   parsePonytailReviewDraft,
   parseReviewDraft,
+  reconcileExistingFindings,
   ReviewDraft,
   validateVerifiedPonytailFindings,
   validateVerifiedProposalFindings,
+  validateReviewThreadAssessments,
 } from './review-draft';
 import {
   buildRepositorySelectionPrompt,
@@ -81,6 +83,7 @@ export interface RunReviewVerificationGateArgs {
   isReReview?: boolean;
   previousSha?: string | null;
   reviewMemory?: ReviewMemoryContext;
+  reviewThreads?: ReviewThread[];
   baseBranch?: string;
   repositoryCatalog?: RepositoryCatalogEntry[];
   repositoryCatalogPath?: string;
@@ -137,6 +140,7 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     isReReview: args.isReReview,
     previousSha: args.previousSha,
     reviewMemory: args.reviewMemory,
+    reviewThreads: args.reviewThreads,
     baseBranch: args.baseBranch,
     repositoryContext,
     repositoryCatalogPath: args.repositoryCatalogPath,
@@ -148,7 +152,10 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     () => args.spawn(buildReviewDraftPrompt(promptParams), spawnOptions),
     args.capacityRetry,
   );
-  const primaryCandidate = parseReviewDraft(primaryOutput);
+  const parsedPrimary = parseReviewDraft(primaryOutput);
+  const primaryCandidate = args.reviewThreads === undefined
+    ? parsedPrimary
+    : validateReviewThreadAssessments(parsedPrimary, args.reviewThreads, 'primary');
 
   const ponytailOutput = await runModelCapacityRetry(
     'ponytail',
@@ -163,11 +170,27 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     () => args.spawn(buildReviewVerificationPrompt({ ...promptParams, candidate }), spawnOptions),
     args.capacityRetry,
   );
-  const verifiedDraft = validateVerifiedProposalFindings(
-    parseReviewDraft(verificationOutput),
-    candidate,
-  );
-  const verified = validateVerifiedPonytailFindings(verifiedDraft, candidate);
+  const parsedVerified = parseReviewDraft(verificationOutput);
+  const threadValidatedVerified = args.reviewThreads === undefined
+    ? parsedVerified
+    : validateReviewThreadAssessments(parsedVerified, args.reviewThreads, 'verifier');
+  const verifiedDraft = validateVerifiedProposalFindings(threadValidatedVerified, candidate);
+  const reconciledFindings = args.reviewThreads === undefined
+    ? verifiedDraft.existingFindings ?? primaryCandidate.existingFindings ?? []
+    : reconcileExistingFindings(
+      primaryCandidate.existingFindings ?? [],
+      verifiedDraft.existingFindings ?? [],
+    );
+  const reconciledFindingById = new Map(reconciledFindings.map((finding) => [finding.commentId, finding]));
+  const publishableDraft: ReviewDraft = {
+    ...verifiedDraft,
+    existingFindings: reconciledFindings,
+    replies: verifiedDraft.replies.filter((reply) => {
+      const assessment = reconciledFindingById.get(reply.commentId);
+      return !assessment || (assessment.status === 'still_applies' && assessment.severity === reply.severity);
+    }),
+  };
+  const verified = validateVerifiedPonytailFindings(publishableDraft, candidate);
 
   await args.publish(verified);
   return verified;

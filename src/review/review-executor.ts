@@ -10,6 +10,7 @@
 import {
   getPRDetails,
   getPRHeadSha,
+  listReviewThreads,
   postInlineReview,
   postReviewCommentReply,
   verifyReviewPosted,
@@ -149,6 +150,8 @@ async function executeReviewInternal(
         throw new Error('Could not resolve current PR head SHA for verified review posting');
       }
 
+      const reviewThreads = await listReviewThreads(owner, repo, prNumber);
+
       let reviewMemory;
       try {
         reviewMemory = getReviewMemoryContext({ owner, repo, limit: config.reviewMemoryMaxLessons });
@@ -172,6 +175,7 @@ async function executeReviewInternal(
         isReReview,
         previousSha,
         reviewMemory,
+        reviewThreads,
         baseBranch: prBaseBranch ?? undefined,
         repositoryCatalog: cachedWorkspace ? repositoryCache?.getCatalog() : undefined,
         repositoryCatalogPath: cachedWorkspace ? repositoryCache?.getCatalogPath() : undefined,
