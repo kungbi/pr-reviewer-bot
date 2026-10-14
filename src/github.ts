@@ -4,10 +4,12 @@
  */
 
 import axios from 'axios';
+import { createHash } from 'node:crypto';
 import logger from './utils/logger';
 import config from './utils/config';
 import { RateLimitError, isRateLimited, getRateLimitReset, createRetryFunction } from './utils/errors';
 import { PRDetails, InlineComment, RepositoryPermission, ReviewComment, ReviewEvent, ReviewThread, ReviewThreadComment } from './types';
+import type ReviewedPRsState from './utils/state-manager';
 
 const GH_API = 'https://api.github.com';
 
@@ -444,23 +446,134 @@ const verifyReviewPosted = createRetryFunction(async (owner: unknown, repo: unkn
 }, 3, 1000) as (owner: string, repo: string, prNumber: number, headSha: string) => Promise<boolean>;
 
 /**
- * Post an inline review with per-line comments.
+ * Post an inline review exactly once. Review creation is not idempotent, so a
+ * transport/API error must be reconciled with GitHub before another write.
  */
-const _postInlineReviewRaw = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, headSha: unknown, body: unknown, event: unknown, comments: unknown): Promise<unknown> => {
-  const commentsArr = comments as InlineComment[];
-  logger.info(`Posting inline review (${commentsArr.length} comments) to ${owner}/${repo}#${prNumber}`);
+async function postInlineReviewOnce(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  body: string,
+  event: ReviewEvent,
+  comments: InlineComment[],
+): Promise<unknown> {
+  logger.info(`Posting inline review (${comments.length} comments) to ${owner}/${repo}#${prNumber}`);
   const res = await axios.post(
     `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
     { commit_id: headSha, body, event, comments },
-    { headers: getHeaders() }
+    { headers: getHeaders() },
   );
-  checkRateLimit(res.headers as Record<string, string>);
+
+  const headers = res.headers as Record<string, string>;
+  if (isRateLimited(headers)) {
+    logger.warn(
+      `Review POST succeeded but GitHub rate limit is low. Remaining: ${headers['x-ratelimit-remaining']}, ` +
+      `Resets at: ${getRateLimitReset(headers)}`,
+    );
+  }
   return res.data;
-}, 3, 1000) as (owner: string, repo: string, prNumber: number, headSha: string, body: string, event: ReviewEvent, comments: InlineComment[]) => Promise<unknown>;
+}
+
+function buildReviewOperationMarker(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  body: string,
+  comments: InlineComment[],
+): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify({ owner, repo, prNumber, headSha, body, comments }))
+    .digest('hex')
+    .slice(0, 24);
+  return `<!-- pr-reviewer-bot:review:${digest} -->`;
+}
+
+function hasExactMarkerLine(body: string, marker: string): boolean {
+  return body.split(/\r?\n/).some(line => line.trim() === marker);
+}
+
+interface SubmittedReview {
+  id?: number;
+  user?: { login?: string };
+  commit_id?: string;
+  state?: string;
+  body?: string;
+}
+
+async function findSubmittedReviewByMarker(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  marker: string,
+  botLogin: string,
+): Promise<SubmittedReview | null> {
+  for (let page = 1; ; page += 1) {
+    const res = await axios.get(
+      `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+      { headers: getHeaders(), params: { per_page: 100, page } },
+    );
+    const reviews = Array.isArray(res.data) ? res.data as SubmittedReview[] : [];
+    const match = reviews.find(review => (
+      review.user?.login === botLogin
+      && review.commit_id === headSha
+      && review.state !== 'PENDING'
+      && typeof review.body === 'string'
+      && hasExactMarkerLine(review.body, marker)
+    ));
+    if (match) return match;
+
+    const headers = res.headers as Record<string, string>;
+    if (isRateLimited(headers)) {
+      throw new RateLimitError('GitHub API rate limit low during review reconciliation', getRateLimitReset(headers));
+    }
+    if (reviews.length < 100) return null;
+  }
+}
+
+async function reconcileSubmittedReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  marker: string,
+  botLogin: string,
+): Promise<SubmittedReview | null> {
+  const delaysMs = [0, 250, 750];
+  for (const delayMs of delaysMs) {
+    if (delayMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    const review = await findSubmittedReviewByMarker(owner, repo, prNumber, headSha, marker, botLogin);
+    if (review) return review;
+  }
+  return null;
+}
+
+function getReviewPublicationKey(owner: string, repo: string, prNumber: number, headSha: string): string {
+  return `${owner}/${repo}#${prNumber}:${headSha}`;
+}
+
+function completeReviewPublicationOrThrow(
+  state: ReviewedPRsState,
+  publicationKey: string,
+  review: SubmittedReview | unknown,
+): void {
+  const reviewId = typeof review === 'object'
+    && review !== null
+    && typeof (review as { id?: unknown }).id === 'number'
+    ? (review as { id: number }).id
+    : undefined;
+  if (!state.completeReviewPublication(publicationKey, reviewId)) {
+    throw new Error(`Failed to persist completed GitHub review publication ${publicationKey}`);
+  }
+}
 
 /**
- * Post an inline review, falling back to COMMENT event if REQUEST_CHANGES/APPROVE
- * is rejected (e.g. when the reviewer is the PR author on own-repo test scenarios).
+ * Publish one durable review operation. Once postAttempted is persisted, this
+ * operation is marker-reconciliation-only and can never issue another POST.
  */
 async function postInlineReview(
   owner: string,
@@ -469,18 +582,183 @@ async function postInlineReview(
   headSha: string,
   body: string,
   event: ReviewEvent,
-  comments: InlineComment[]
+  comments: InlineComment[],
+  state: ReviewedPRsState,
+  prAuthor: string | null,
 ): Promise<unknown> {
-  try {
-    return await _postInlineReviewRaw(owner, repo, prNumber, headSha, body, event, comments);
-  } catch (err) {
-    const error = err as { response?: { status: number }; message?: string };
-    const status = error.response?.status ?? (error.message?.includes('422') ? 422 : null);
-    if (status === 422 && event !== 'COMMENT') {
-      logger.warn(`[github] ${event} review rejected (422) — retrying as COMMENT`);
-      return await _postInlineReviewRaw(owner, repo, prNumber, headSha, body, 'COMMENT', comments);
+  const botLogin = await getAuthenticatedLogin();
+  if (!botLogin) {
+    throw new Error('Cannot publish GitHub review without the authenticated bot login');
+  }
+
+  const publicationKey = getReviewPublicationKey(owner, repo, prNumber, headSha);
+  let publication = state.getReviewPublication(publicationKey);
+
+  if (!publication) {
+    const marker = buildReviewOperationMarker(owner, repo, prNumber, headSha, body, comments);
+    const markedBody = hasExactMarkerLine(body, marker) ? body : `${marker}\n${body}`;
+    const effectiveEvent: ReviewEvent = event !== 'COMMENT'
+      && (!prAuthor || prAuthor.toLowerCase() === botLogin.toLowerCase())
+      ? 'COMMENT'
+      : event;
+
+    if (effectiveEvent !== event) {
+      logger.warn(`[github] Using COMMENT as the first review write because the PR author cannot be safely approved`);
     }
-    throw err;
+
+    const reserved = state.reserveReviewPublication(publicationKey, {
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      botLogin,
+      pendingBody: markedBody,
+      pendingEvent: effectiveEvent,
+      pendingComments: comments,
+      operationMarker: marker,
+    });
+    if (!reserved) {
+      throw new Error(`Failed to reserve GitHub review publication ${publicationKey}`);
+    }
+    publication = state.getReviewPublication(publicationKey);
+  }
+
+  if (!publication) {
+    throw new Error(`Missing GitHub review publication after reservation ${publicationKey}`);
+  }
+  if (
+    publication.owner !== owner
+    || publication.repo !== repo
+    || publication.prNumber !== prNumber
+    || publication.headSha !== headSha
+    || publication.botLogin !== botLogin
+  ) {
+    throw new Error(`GitHub review publication identity mismatch for ${publicationKey}`);
+  }
+
+  let existing: SubmittedReview | null;
+  try {
+    existing = await reconcileSubmittedReview(
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      publication.operationMarker,
+      botLogin,
+    );
+  } catch (reconciliationError) {
+    if (publication.postAttempted && publication.status !== 'completed') {
+      const markedUnknown = state.markReviewPublicationDeliveryUnknown(publicationKey);
+      const message = reconciliationError instanceof Error
+        ? reconciliationError.message
+        : String(reconciliationError);
+      if (!markedUnknown) {
+        throw new Error(
+          `GitHub review delivery is unknown for ${publicationKey}; refusing another POST ` +
+          `(recovery reconciliation failed: ${message}; failed to persist delivery_unknown)`,
+        );
+      }
+      throw new Error(
+        `GitHub review delivery is unknown for ${publicationKey}; refusing another POST ` +
+        `(recovery reconciliation failed: ${message})`,
+      );
+    }
+    throw reconciliationError;
+  }
+  if (existing) {
+    completeReviewPublicationOrThrow(state, publicationKey, existing);
+    logger.warn('[github] Reconciled an already-persisted review publication before writing');
+    return existing;
+  }
+
+  if (publication.status === 'completed' || publication.postAttempted) {
+    if (publication.status !== 'completed') {
+      state.markReviewPublicationDeliveryUnknown(publicationKey);
+    }
+    throw new Error(`GitHub review delivery is unknown for ${publicationKey}; refusing another POST`);
+  }
+
+  if (!publication.pendingBody || !publication.pendingEvent || !publication.pendingComments) {
+    throw new Error(`Incomplete pending GitHub review publication ${publicationKey}`);
+  }
+
+  if (!state.markReviewPublicationPostAttempted(publicationKey)) {
+    throw new Error(`Failed to persist GitHub review POST attempt ${publicationKey}`);
+  }
+  publication = state.getReviewPublication(publicationKey);
+  if (
+    !publication
+    || publication.status !== 'pending'
+    || !publication.postAttempted
+    || !publication.pendingBody
+    || !publication.pendingEvent
+    || !publication.pendingComments
+  ) {
+    throw new Error(`Incomplete pending GitHub review publication after reservation ${publicationKey}`);
+  }
+
+  try {
+    const posted = await postInlineReviewOnce(
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      publication.pendingBody,
+      publication.pendingEvent,
+      publication.pendingComments,
+    );
+    completeReviewPublicationOrThrow(state, publicationKey, posted);
+    return posted;
+  } catch (err) {
+    let reconciled: SubmittedReview | null;
+    try {
+      reconciled = await reconcileSubmittedReview(
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        publication.operationMarker,
+        botLogin,
+      );
+    } catch (reconciliationError) {
+      const markedUnknown = state.markReviewPublicationDeliveryUnknown(publicationKey);
+      const reconciliationMessage = reconciliationError instanceof Error
+        ? reconciliationError.message
+        : String(reconciliationError);
+      if (!markedUnknown) {
+        throw new Error(
+          `GitHub review delivery is unknown for ${publicationKey}; refusing another POST ` +
+          `(reconciliation failed: ${reconciliationMessage}; failed to persist delivery_unknown)`,
+        );
+      }
+      throw new Error(
+        `GitHub review delivery is unknown for ${publicationKey}; refusing another POST ` +
+        `(reconciliation failed: ${reconciliationMessage})`,
+      );
+    }
+    if (reconciled) {
+      completeReviewPublicationOrThrow(state, publicationKey, reconciled);
+      logger.warn('[github] Reconciled an already-persisted review after an ambiguous response');
+      return reconciled;
+    }
+
+    const status = (err as { response?: { status?: number } }).response?.status;
+    if (status === 422 && publication.pendingEvent !== 'COMMENT') {
+      if (state.fallbackReviewPublicationToComment(publicationKey)) {
+        logger.warn(`[github] ${publication.pendingEvent} review rejected (422); retrying as COMMENT`);
+        return await postInlineReview(owner, repo, prNumber, headSha, body, event, comments, state, prAuthor);
+      }
+    }
+
+    const markedUnknown = state.markReviewPublicationDeliveryUnknown(publicationKey);
+    const message = err instanceof Error ? err.message : String(err);
+    if (!markedUnknown) {
+      throw new Error(
+        `GitHub review delivery is unknown for ${publicationKey}; refusing another POST ` +
+        `(${message}; failed to persist delivery_unknown)`,
+      );
+    }
+    throw new Error(`GitHub review delivery is unknown for ${publicationKey}; refusing another POST (${message})`);
   }
 }
 

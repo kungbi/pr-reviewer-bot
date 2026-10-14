@@ -104,6 +104,7 @@ describe('executeReview persistent repository cache integration', () => {
     await gateArgs.publish({ summary: 'verified', comments: [], replies: [] });
     expect(mockPostInlineReview).toHaveBeenCalledWith(
       'org', 'api', 123, 'workspace-head-sha', expect.any(String), 'APPROVE', [],
+      state, 'author',
     );
     expect(cache.cleanupPRWorkspace).toHaveBeenCalledWith('/tmp/pr-worktree');
   });

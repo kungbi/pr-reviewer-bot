@@ -188,6 +188,8 @@ async function executeReviewInternal(
           repo,
           prNumber,
           headSha: headSha as string,
+          prAuthor,
+          state,
           draft,
           postInlineReview,
           postReviewCommentReply,

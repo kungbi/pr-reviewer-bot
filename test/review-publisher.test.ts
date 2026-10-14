@@ -1,8 +1,10 @@
 import { publishVerifiedDraft } from '../src/review/review-publisher';
 import { ReviewDraft } from '../src/review/review-draft';
 import { BOT_AUTHOR_DISCLOSURE } from '../src/utils/comment-disclosure';
+import type ReviewedPRsState from '../src/utils/state-manager';
 
 describe('publishVerifiedDraft', () => {
+  const state = {} as ReviewedPRsState;
   const draft: ReviewDraft = {
     summary: '검증을 통과한 이슈가 있습니다.',
     comments: [
@@ -28,6 +30,8 @@ describe('publishVerifiedDraft', () => {
       repo: 'repo',
       prNumber: 123,
       headSha: 'abc123',
+      prAuthor: 'author',
+      state,
       draft,
       postInlineReview,
       postReviewCommentReply,
@@ -46,6 +50,8 @@ describe('publishVerifiedDraft', () => {
         line: 20,
         body: expect.stringContaining(BOT_AUTHOR_DISCLOSURE),
       })],
+      state,
+      'author',
     );
   });
 
@@ -66,7 +72,7 @@ describe('publishVerifiedDraft', () => {
     };
 
     await publishVerifiedDraft({
-      owner: 'org', repo: 'repo', prNumber: 123, headSha: 'abc123',
+      owner: 'org', repo: 'repo', prNumber: 123, headSha: 'abc123', prAuthor: 'author', state,
       draft: replyOnlyDraft, postInlineReview, postReviewCommentReply,
     });
 
@@ -77,6 +83,8 @@ describe('publishVerifiedDraft', () => {
       ),
       'COMMENT',
       [],
+      state,
+      'author',
     );
     expect(postReviewCommentReply).toHaveBeenCalledWith(
       'org', 'repo', 123, 11,

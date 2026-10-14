@@ -1,5 +1,6 @@
 import { InlineComment, ReviewEvent } from '../types';
 import { appendBotAuthorDisclosure, BOT_AUTHOR_DISCLOSURE } from '../utils/comment-disclosure';
+import type ReviewedPRsState from '../utils/state-manager';
 import { prepareReviewForPosting, ReviewDraft } from './review-draft';
 
 export interface PublishVerifiedDraftArgs {
@@ -7,6 +8,8 @@ export interface PublishVerifiedDraftArgs {
   repo: string;
   prNumber: number;
   headSha: string;
+  prAuthor: string | null;
+  state: ReviewedPRsState;
   draft: ReviewDraft;
   postInlineReview: (
     owner: string,
@@ -16,6 +19,8 @@ export interface PublishVerifiedDraftArgs {
     body: string,
     event: ReviewEvent,
     comments: InlineComment[],
+    state: ReviewedPRsState,
+    prAuthor: string | null,
   ) => Promise<unknown>;
   postReviewCommentReply: (
     owner: string,
@@ -65,6 +70,8 @@ export async function publishVerifiedDraft(args: PublishVerifiedDraftArgs): Prom
     body,
     posting.event,
     posting.comments,
+    args.state,
+    args.prAuthor,
   );
 }
 

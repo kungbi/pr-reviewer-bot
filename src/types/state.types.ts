@@ -1,3 +1,5 @@
+import type { InlineComment, ReviewEvent } from './github.types';
+
 export type PRStatus =
   | 'reviewing'
   | 'reviewed'
@@ -32,8 +34,33 @@ export interface StateFile {
   repliedComments: Record<string, { commentedAt: string }>;
   closedReviewThreads?: Record<string, ReviewThreadClosure>;
   pendingReviewReplies?: Record<string, ReviewReplyDelivery>;
+  reviewPublications?: Record<string, ReviewPublication>;
   replyMonitorStartedAt?: string;
 }
+
+export type ReviewPublicationStatus = 'pending' | 'delivery_unknown' | 'completed';
+
+export interface ReviewPublication {
+  createdAt: string;
+  status: ReviewPublicationStatus;
+  owner: string;
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  botLogin: string;
+  pendingBody?: string;
+  pendingEvent?: ReviewEvent;
+  pendingComments?: InlineComment[];
+  operationMarker: string;
+  postAttempted: boolean;
+  completedAt?: string;
+  reviewId?: number;
+}
+
+export type NewReviewPublication = Omit<
+  ReviewPublication,
+  'createdAt' | 'status' | 'postAttempted' | 'completedAt' | 'reviewId'
+>;
 
 export interface CommentReplyEntry {
   commentedAt: string;

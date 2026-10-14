@@ -2,8 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import logger from './logger';
 import {
+  NewReviewPublication,
   PRStatus,
   PRStateEntry,
+  ReviewPublication,
   ReviewReplyDelivery,
   ReviewThreadClosure,
   ReviewThreadResolution,
@@ -24,6 +26,7 @@ const STALE_REVIEWING_MS = REVIEW_TIMEOUT_MS + 5 * 60 * 1000;
 class ReviewedPRsState {
   stateFilePath: string;
   data: StateFile;
+  private reviewPublicationLockHeld = false;
 
   constructor(stateFilePath = 'reviewed-prs.json') {
     this.stateFilePath = stateFilePath;
@@ -33,30 +36,104 @@ class ReviewedPRsState {
     };
   }
 
+  private parseStateData(parsed: unknown): { data: StateFile; migrated: boolean } {
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+        'reviewedPRs' in parsed) {
+      const candidate = parsed as Partial<StateFile>;
+      if (!candidate.reviewedPRs || typeof candidate.reviewedPRs !== 'object' ||
+          Array.isArray(candidate.reviewedPRs)) {
+        throw new Error('State file has unexpected format: reviewedPRs must be an object');
+      }
+      if (candidate.repliedComments !== undefined &&
+          (typeof candidate.repliedComments !== 'object' || Array.isArray(candidate.repliedComments))) {
+        throw new Error('State file has unexpected format: repliedComments must be an object');
+      }
+      if (candidate.reviewPublications !== undefined &&
+          (typeof candidate.reviewPublications !== 'object' || Array.isArray(candidate.reviewPublications))) {
+        throw new Error('State file has unexpected format: reviewPublications must be an object');
+      }
+      return {
+        data: {
+          ...candidate,
+          reviewedPRs: candidate.reviewedPRs,
+          repliedComments: candidate.repliedComments ?? {},
+        } as StateFile,
+        migrated: false,
+      };
+    }
+
+    if (Array.isArray(parsed)) {
+      const reviewedPRs: Record<string, PRStateEntry> = {};
+      for (const key of parsed as unknown[]) {
+        if (typeof key !== 'string') continue;
+        const match = key.match(/^([^/]+)\/([^#]+)#(\d+)$/);
+        if (match) {
+          reviewedPRs[key] = {
+            owner: match[1],
+            repo: match[2],
+            prNumber: parseInt(match[3]),
+            status: 'reviewed',
+            reviewedAt: new Date().toISOString(),
+          };
+        }
+      }
+      return { data: { reviewedPRs, repliedComments: {} }, migrated: true };
+    }
+
+    throw new Error('State file has unexpected format');
+  }
+
+  private loadReviewPublicationStateStrict(): void {
+    if (!fs.existsSync(this.stateFilePath)) {
+      throw new Error(`Durable state file is missing: ${this.stateFilePath}`);
+    }
+    const parsed = JSON.parse(fs.readFileSync(this.stateFilePath, 'utf8')) as unknown;
+    this.data = this.parseStateData(parsed).data;
+  }
+
+  private withReviewPublicationLock(operation: () => boolean, refreshBeforeOperation = true): boolean {
+    const lockFilePath = `${this.stateFilePath}.review-publication.lock`;
+    fs.mkdirSync(path.dirname(this.stateFilePath), { recursive: true });
+    let lockFd: number;
+    try {
+      lockFd = fs.openSync(lockFilePath, 'wx');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        logger.warn(`[StateManager] State file is locked: ${lockFilePath}`);
+        return false;
+      }
+      throw error;
+    }
+
+    this.reviewPublicationLockHeld = true;
+    try {
+      if (refreshBeforeOperation) {
+        // Another process or state instance may have written since this instance
+        // loaded. Refresh under the exclusive lock before every transition.
+        this.loadReviewPublicationStateStrict();
+      }
+      return operation();
+    } finally {
+      this.reviewPublicationLockHeld = false;
+      fs.closeSync(lockFd);
+      try {
+        fs.unlinkSync(lockFilePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+  }
+
   load(): void {
     try {
       if (fs.existsSync(this.stateFilePath)) {
         const content = fs.readFileSync(this.stateFilePath, 'utf8');
         const parsed = JSON.parse(content) as unknown;
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
-            'reviewedPRs' in parsed) {
-          // Correct format — use as-is
-          this.data = parsed as StateFile;
-        } else if (Array.isArray(parsed)) {
-          // Legacy flat-array format — migrate to object format, preserving keys
+        const loaded = this.parseStateData(parsed);
+        this.data = loaded.data;
+        if (loaded.migrated) {
           logger.warn('[StateManager] Migrating legacy flat-array state to object format');
-          const reviewedPRs: Record<string, PRStateEntry> = {};
-          for (const key of parsed as string[]) {
-            const m = key.match(/^([^/]+)\/([^#]+)#(\d+)$/);
-            if (m) {
-              reviewedPRs[key] = { owner: m[1], repo: m[2], prNumber: parseInt(m[3]), status: 'reviewed', reviewedAt: new Date().toISOString() };
-            }
-          }
-          this.data = { reviewedPRs, repliedComments: {} };
           this.save();
-        } else {
-          logger.warn('[StateManager] State file has unexpected format, resetting to defaults');
-          this.data = { reviewedPRs: {}, repliedComments: {} };
         }
       }
     } catch (error) {
@@ -65,11 +142,47 @@ class ReviewedPRsState {
     }
   }
 
-  save(): void {
+  private readPersistedReviewPublications(): Record<string, ReviewPublication> {
+    if (!fs.existsSync(this.stateFilePath)) {
+      throw new Error(`Durable state file is missing: ${this.stateFilePath}`);
+    }
+    const parsed = JSON.parse(fs.readFileSync(this.stateFilePath, 'utf8')) as unknown;
+    return this.parseStateData(parsed).data.reviewPublications ?? {};
+  }
+
+  private writeStateFile(): void {
     const tempFilePath = `${this.stateFilePath}.tmp`;
+    fs.writeFileSync(tempFilePath, JSON.stringify(this.data, null, 2), 'utf8');
+    fs.renameSync(tempFilePath, this.stateFilePath);
+  }
+
+  save(): void {
     try {
-      fs.writeFileSync(tempFilePath, JSON.stringify(this.data, null, 2), 'utf8');
-      fs.renameSync(tempFilePath, this.stateFilePath);
+      if (this.reviewPublicationLockHeld) {
+        this.writeStateFile();
+        return;
+      }
+
+      const pendingData = this.data;
+      const saved = this.withReviewPublicationLock(() => {
+        // Generic PR/reply state may be stale in another process. Never let it
+        // delete or downgrade a durable review-publication tombstone already on disk.
+        const persistedPublications = fs.existsSync(this.stateFilePath)
+          ? this.readPersistedReviewPublications()
+          : {};
+        this.data = {
+          ...pendingData,
+          reviewPublications: {
+            ...(pendingData.reviewPublications ?? {}),
+            ...persistedPublications,
+          },
+        };
+        this.writeStateFile();
+        return true;
+      }, false);
+      if (!saved) {
+        throw new Error(`Could not acquire state lock for ${this.stateFilePath}`);
+      }
     } catch (error) {
       logger.error(`[StateManager] Failed to save state: ${(error as Error).message}`);
       throw error;
@@ -327,6 +440,82 @@ class ReviewedPRsState {
     delete this.data.pendingReviewReplies![deliveryKey];
     this.save();
     return true;
+  }
+
+  getReviewPublication(publicationKey: string): ReviewPublication | undefined {
+    return this.data.reviewPublications?.[publicationKey];
+  }
+
+  reserveReviewPublication(publicationKey: string, publication: NewReviewPublication): boolean {
+    return this.withReviewPublicationLock(() => {
+      if (this.data.reviewPublications?.[publicationKey]) return false;
+      this.data.reviewPublications ??= {};
+      this.data.reviewPublications[publicationKey] = {
+        ...publication,
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        postAttempted: false,
+      };
+      this.save();
+      return true;
+    });
+  }
+
+  markReviewPublicationPostAttempted(publicationKey: string): boolean {
+    return this.withReviewPublicationLock(() => {
+      const publication = this.data.reviewPublications?.[publicationKey];
+      if (!publication || publication.status !== 'pending' || publication.postAttempted) return false;
+      publication.postAttempted = true;
+      this.save();
+      return true;
+    });
+  }
+
+  fallbackReviewPublicationToComment(publicationKey: string): boolean {
+    return this.withReviewPublicationLock(() => {
+      const publication = this.data.reviewPublications?.[publicationKey];
+      if (
+        !publication
+        || publication.status !== 'pending'
+        || !publication.postAttempted
+        || !publication.pendingEvent
+        || publication.pendingEvent === 'COMMENT'
+      ) return false;
+
+      publication.pendingEvent = 'COMMENT';
+      publication.postAttempted = false;
+      this.save();
+      return true;
+    });
+  }
+
+  markReviewPublicationDeliveryUnknown(publicationKey: string): boolean {
+    return this.withReviewPublicationLock(() => {
+      const publication = this.data.reviewPublications?.[publicationKey];
+      if (!publication) return false;
+      if (publication.status === 'delivery_unknown') return publication.postAttempted;
+      if (publication.status !== 'pending' || !publication.postAttempted) return false;
+
+      publication.status = 'delivery_unknown';
+      this.save();
+      return true;
+    });
+  }
+
+  completeReviewPublication(publicationKey: string, reviewId?: number): boolean {
+    return this.withReviewPublicationLock(() => {
+      const publication = this.data.reviewPublications?.[publicationKey];
+      if (!publication) return false;
+      publication.status = 'completed';
+      publication.postAttempted = true;
+      publication.completedAt = new Date().toISOString();
+      if (reviewId !== undefined) publication.reviewId = reviewId;
+      delete publication.pendingBody;
+      delete publication.pendingEvent;
+      delete publication.pendingComments;
+      this.save();
+      return true;
+    });
   }
 
   getPendingReplies(): PRStateEntry[] {

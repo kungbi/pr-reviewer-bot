@@ -11,12 +11,44 @@ describe('ReviewedPRsState', () => {
 
   beforeEach(() => {
     stateFile = tmpFile();
+    fs.writeFileSync(stateFile, JSON.stringify({ reviewedPRs: {}, repliedComments: {} }), 'utf8');
     state = new ReviewedPRsState(stateFile);
     state.load();
   });
 
   afterEach(() => {
     if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile);
+  });
+
+  describe('fresh state persistence', () => {
+    it('creates the state file on the first ordinary save when no file exists', () => {
+      fs.unlinkSync(stateFile);
+      const freshState = new ReviewedPRsState(stateFile);
+      freshState.load();
+
+      freshState.markPRReviewing('owner', 'repo', 7);
+
+      expect(fs.existsSync(stateFile)).toBe(true);
+      const persisted = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      expect(persisted.reviewedPRs['owner/repo#7'].status).toBe('reviewing');
+    });
+
+    it('creates parent directories before saving a fresh state file', () => {
+      const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'state-test-dir-'));
+      try {
+        const freshStateFile = path.join(tempDirectory, 'nested', 'reviewed-prs.json');
+        const freshState = new ReviewedPRsState(freshStateFile);
+        freshState.load();
+
+        freshState.markPRReviewing('owner', 'repo', 8);
+
+        expect(fs.existsSync(freshStateFile)).toBe(true);
+        const persisted = JSON.parse(fs.readFileSync(freshStateFile, 'utf8'));
+        expect(persisted.reviewedPRs['owner/repo#8'].status).toBe('reviewing');
+      } finally {
+        fs.rmSync(tempDirectory, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('PR review tracking', () => {
@@ -190,19 +222,170 @@ describe('ReviewedPRsState', () => {
       expect((reloaded as any).getReviewReplyDelivery(deliveryKey)).toBeUndefined();
     });
 
-    it('preserves durable thread closures and reply outbox entries when pruning old PR metadata', () => {
+    it('fails closed when the durable state file disappears before publication reservation', () => {
+      state.save();
+      fs.unlinkSync(stateFile);
+
+      expect(() => (state as any).reserveReviewPublication('owner/repo#1:head-sha', {
+        owner: 'owner', repo: 'repo', prNumber: 1, headSha: 'head-sha', botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\nbody', pendingEvent: 'APPROVE', pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toThrow(/durable state file is missing/i);
+      expect(fs.existsSync(stateFile)).toBe(false);
+    });
+
+    it('fails closed without overwriting malformed durable state', () => {
+      const malformed = '{"reviewedPRs":';
+      fs.writeFileSync(stateFile, malformed, 'utf8');
+
+      expect(() => (state as any).reserveReviewPublication('owner/repo#1:head-sha', {
+        owner: 'owner', repo: 'repo', prNumber: 1, headSha: 'head-sha', botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\nbody', pendingEvent: 'APPROVE', pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toThrow();
+      expect(fs.readFileSync(stateFile, 'utf8')).toBe(malformed);
+    });
+
+    it('fails closed without overwriting an unexpected durable state shape', () => {
+      const unexpected = JSON.stringify({ unrelated: true });
+      fs.writeFileSync(stateFile, unexpected, 'utf8');
+
+      expect(() => (state as any).reserveReviewPublication('owner/repo#1:head-sha', {
+        owner: 'owner', repo: 'repo', prNumber: 1, headSha: 'head-sha', botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\nbody', pendingEvent: 'APPROVE', pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toThrow(/unexpected format/i);
+      expect(fs.readFileSync(stateFile, 'utf8')).toBe(unexpected);
+    });
+
+    it('durably reserves, marks attempted, and retains a completed review publication tombstone', () => {
+      const publicationKey = 'owner/repo#1:head-sha';
+      expect((state as any).reserveReviewPublication(publicationKey, {
+        owner: 'owner',
+        repo: 'repo',
+        prNumber: 1,
+        headSha: 'head-sha',
+        botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\nbody',
+        pendingEvent: 'APPROVE',
+        pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toBe(true);
+      expect((state as any).markReviewPublicationPostAttempted(publicationKey)).toBe(true);
+      expect((state as any).completeReviewPublication(publicationKey, 9001)).toBe(true);
+
+      const reloaded = new ReviewedPRsState(stateFile);
+      reloaded.load();
+      expect((reloaded as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
+        status: 'completed',
+        postAttempted: true,
+        reviewId: 9001,
+        operationMarker: '<!-- marker -->',
+      }));
+      expect((reloaded as any).getReviewPublication(publicationKey).pendingBody).toBeUndefined();
+    });
+
+    it('switches a definitively rejected review to an unattempted COMMENT fallback', () => {
+      const publicationKey = 'owner/repo#1:head-sha';
+      expect((state as any).reserveReviewPublication(publicationKey, {
+        owner: 'owner', repo: 'repo', prNumber: 1, headSha: 'head-sha', botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\\nbody', pendingEvent: 'REQUEST_CHANGES', pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toBe(true);
+      expect((state as any).markReviewPublicationPostAttempted(publicationKey)).toBe(true);
+
+      expect((state as any).fallbackReviewPublicationToComment(publicationKey)).toBe(true);
+      expect((state as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
+        status: 'pending',
+        pendingEvent: 'COMMENT',
+        postAttempted: false,
+      }));
+      expect((state as any).markReviewPublicationDeliveryUnknown(publicationKey)).toBe(false);
+      expect((state as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
+        status: 'pending',
+        pendingEvent: 'COMMENT',
+        postAttempted: false,
+      }));
+      expect((state as any).fallbackReviewPublicationToComment(publicationKey)).toBe(false);
+    });
+
+    it('allows only one reservation across state instances loaded from the same file', () => {
+      const publicationKey = 'owner/repo#1:head-sha';
+      const competingState = new ReviewedPRsState(stateFile);
+      competingState.load();
+      const publication = {
+        owner: 'owner',
+        repo: 'repo',
+        prNumber: 1,
+        headSha: 'head-sha',
+        botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\nbody',
+        pendingEvent: 'APPROVE' as const,
+        pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      };
+
+      expect((state as any).reserveReviewPublication(publicationKey, publication)).toBe(true);
+      expect((competingState as any).reserveReviewPublication(publicationKey, publication)).toBe(false);
+
+      competingState.load();
+      expect((competingState as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
+        status: 'pending',
+        postAttempted: false,
+      }));
+    });
+
+    it('preserves a publication when a stale state instance saves unrelated PR metadata', () => {
+      const publicationKey = 'owner/repo#1:head-sha';
+      const staleWriter = new ReviewedPRsState(stateFile);
+      staleWriter.load();
+
+      expect((state as any).reserveReviewPublication(publicationKey, {
+        owner: 'owner',
+        repo: 'repo',
+        prNumber: 1,
+        headSha: 'head-sha',
+        botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\nbody',
+        pendingEvent: 'APPROVE',
+        pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toBe(true);
+
+      staleWriter.markPRRetryFailure('other', 'repo', 2, 'unrelated failure');
+
+      const reloaded = new ReviewedPRsState(stateFile);
+      reloaded.load();
+      expect((reloaded as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
+        operationMarker: '<!-- marker -->',
+        status: 'pending',
+      }));
+    });
+
+    it('preserves durable publication, thread closure, and reply outbox tombstones when pruning old PR metadata', () => {
       const prKey = 'owner/repo#1';
       const threadKey = `${prKey}:thread:100`;
       const deliveryKey = `${prKey}:comment:101`;
+      const publicationKey = `${prKey}:head-sha`;
       state.markPRReviewed('owner', 'repo', 1, 'reviewed');
       state.markReviewThreadClosed(threadKey, 'human_handoff');
       state.reserveReviewReplyDelivery(deliveryKey, 101, 100, 'body', 'head', '<!-- marker -->');
+      (state as any).reserveReviewPublication(publicationKey, {
+        owner: 'owner', repo: 'repo', prNumber: 1, headSha: 'head-sha', botLogin: 'review-bot',
+        pendingBody: '<!-- review marker -->\nbody', pendingEvent: 'APPROVE', pendingComments: [],
+        operationMarker: '<!-- review marker -->',
+      });
+      (state as any).markReviewPublicationPostAttempted(publicationKey);
+      (state as any).completeReviewPublication(publicationKey, 9001);
       state.data.reviewedPRs[prKey].reviewedAt = '2000-01-01T00:00:00.000Z';
       state.save();
 
       expect(state.pruneOldEntries(1)).toBe(1);
       expect(state.data.closedReviewThreads?.[threadKey]).toEqual(expect.objectContaining({ resolution: 'human_handoff' }));
       expect(state.data.pendingReviewReplies?.[deliveryKey]).toEqual(expect.objectContaining({ resolution: 'pending' }));
+      expect((state as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
+        status: 'completed', reviewId: 9001,
+      }));
     });
 
     it('returns only monitorable PRs within the reply lookback window', () => {
