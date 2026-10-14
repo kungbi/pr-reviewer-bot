@@ -53,6 +53,9 @@ describe('buildAnalysisPrompt', () => {
     expect(prompt).toContain('근거 없이 "이해하기 어렵다"');
     expect(prompt).toContain('기존 패턴과 다른 지점');
     expect(prompt).toContain('확신이 낮으면 Blocker/Important로 단정하지 말고 질문/제안 톤');
+    expect(prompt).toContain('확신할 수 없는 코멘트도 버리지 마라');
+    expect(prompt).toContain('확신하지 못한 이유');
+    expect(prompt).not.toContain('100% 확신이 서지 않는 코멘트는 **버려라**');
   });
 
   it('tells the review agent not to post dependency-missing verification disclaimers', () => {

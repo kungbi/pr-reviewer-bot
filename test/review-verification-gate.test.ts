@@ -10,6 +10,20 @@ const runModelCapacityRetry = (verificationGateModule as typeof verificationGate
   ) => Promise<T>;
 }).runModelCapacityRetry;
 
+function verifiedJson(draft: { summary: string; comments: object[]; replies: object[] }): string {
+  return JSON.stringify({
+    ...draft,
+    comments: draft.comments.map((comment) => ({
+      ...comment,
+      verification: { confidence: 'confirmed' },
+    })),
+    replies: draft.replies.map((reply) => ({
+      ...reply,
+      verification: { confidence: 'confirmed' },
+    })),
+  });
+}
+
 describe('runReviewVerificationGate', () => {
   const unresolvedThread = {
     id: 'PRRT_thread',
@@ -42,7 +56,7 @@ describe('runReviewVerificationGate', () => {
     comments: [],
     replies: [],
   });
-  const verifiedDraft = JSON.stringify({
+  const verifiedDraft = verifiedJson({
     summary: '검증 통과: 실제 오류 처리 누락',
     comments: [{
       path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.',
@@ -73,7 +87,7 @@ describe('runReviewVerificationGate', () => {
     expect(result.summary).toBe('검증 통과: 실제 오류 처리 누락');
   });
 
-  it('fails closed if the primary reviewer omits an unresolved review thread assessment', async () => {
+  it('fails closed if the primary reviewer omits an unresolved review thread assessment before recall', async () => {
     const noAssessment = JSON.stringify({ summary: '이슈 없음', comments: [], replies: [], existingFindings: [] });
     const spawn = jest.fn()
       .mockResolvedValueOnce(noAssessment)
@@ -85,6 +99,7 @@ describe('runReviewVerificationGate', () => {
     } as Parameters<typeof runReviewVerificationGate>[0] & { reviewThreads: unknown[] };
 
     await expect(runReviewVerificationGate(args)).rejects.toThrow('every unresolved review thread');
+    expect(spawn).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();
   });
 
@@ -92,7 +107,11 @@ describe('runReviewVerificationGate', () => {
     const primary = JSON.stringify({
       summary: '기존 지적은 여전히 유효합니다.',
       comments: [],
-      replies: [],
+      replies: [{
+        commentId: 4243959293,
+        severity: 'important',
+        body: '기존 스레드에서 확인한 추가 영향입니다.',
+      }],
       existingFindings: [{
         commentId: 4243959293,
         status: 'still_applies',
@@ -103,7 +122,12 @@ describe('runReviewVerificationGate', () => {
     const verifier = JSON.stringify({
       summary: '기존 지적 상태를 독립 검증했습니다.',
       comments: [],
-      replies: [],
+      replies: [{
+        commentId: 4243959293,
+        severity: 'important',
+        body: '기존 스레드에서 확인한 추가 영향입니다.',
+        verification: { confidence: 'confirmed' },
+      }],
       existingFindings: [{
         commentId: 4243959293,
         status: 'fixed_in_code',
@@ -124,10 +148,133 @@ describe('runReviewVerificationGate', () => {
 
     expect(result).toMatchObject({
       existingFindings: [{ commentId: 4243959293, status: 'uncertain', severity: null }],
+      replies: [{
+        commentId: 4243959293,
+        verification: { confidence: 'uncertain' },
+      }],
     });
+    expect(result.replies[0].verification?.uncertaintyReason).toContain('fixed_in_code');
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({
       existingFindings: [expect.objectContaining({ status: 'uncertain' })],
+      replies: [expect.objectContaining({
+        verification: expect.objectContaining({ confidence: 'uncertain' }),
+      })],
     }));
+  });
+
+  it('runs an independent correctness recall pass before approving an empty primary draft without losing thread assessments', async () => {
+    const assessment = {
+      commentId: 4243959293,
+      status: 'still_applies',
+      severity: 'minor',
+      body: '기존 스레드는 여전히 유효합니다.',
+    };
+    const emptyPrimary = JSON.stringify({
+      summary: '1차에서 후보를 찾지 못했습니다.',
+      comments: [],
+      replies: [],
+      existingFindings: [assessment],
+    });
+    const recalled = JSON.stringify({
+      summary: '누락 탐지 후보 1건',
+      comments: [{
+        path: 'src/worker.ts', line: 70, side: 'RIGHT', severity: 'important', kind: 'finding',
+        body: '순차 작업의 전체 시간 예산이 HTTP timeout을 넘을 수 있습니다.',
+      }],
+      replies: [],
+    });
+    const verifiedRecall = JSON.stringify({
+      summary: '누락 탐지 후보를 검증했습니다.',
+      comments: [{
+        path: 'src/worker.ts', line: 70, side: 'RIGHT', severity: 'important', kind: 'finding',
+        body: '순차 작업의 전체 시간 예산이 HTTP timeout을 넘을 수 있습니다.',
+        verification: { confidence: 'confirmed' },
+      }],
+      replies: [],
+      existingFindings: [assessment],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(emptyPrimary)
+      .mockResolvedValueOnce(recalled)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(verifiedRecall);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    const result = await runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, clonePath: '/tmp/repo',
+      reviewThreads: [unresolvedThread], spawn, publish,
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(4);
+    expect(spawn.mock.calls[0][0]).toContain('1차 코드 리뷰어');
+    expect(spawn.mock.calls[1][0]).toContain('독립 누락 탐지 리뷰어');
+    expect(spawn.mock.calls[2][0]).toContain('Ponytail');
+    expect(spawn.mock.calls[3][0]).toContain('독립 검증자');
+    expect(spawn.mock.calls[3][0]).toContain('순차 작업의 전체 시간 예산이 HTTP timeout을 넘을 수 있습니다.');
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({
+      comments: [expect.objectContaining({ path: 'src/worker.ts', line: 70 })],
+      existingFindings: [assessment],
+    }));
+    expect(result.comments).toHaveLength(1);
+    expect(result.existingFindings).toEqual([assessment]);
+  });
+
+  it('fails closed when the verifier omits an active thread assessment', async () => {
+    const assessment = {
+      commentId: 4243959293,
+      status: 'still_applies',
+      severity: 'minor',
+      body: '기존 스레드는 여전히 유효합니다.',
+    };
+    const primary = JSON.stringify({
+      summary: '후보',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '후보',
+      }],
+      replies: [],
+      existingFindings: [assessment],
+    });
+    const verifier = verifiedJson({
+      summary: '검증 통과',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '후보',
+      }],
+      replies: [],
+    });
+    const spawn = jest.fn()
+      .mockResolvedValueOnce(primary)
+      .mockResolvedValueOnce(ponytailNoFindings)
+      .mockResolvedValueOnce(verifier);
+    const publish = jest.fn().mockResolvedValue(undefined);
+
+    await expect(runReviewVerificationGate({
+      owner: 'org', repo: 'repo', prNumber: 123, reviewThreads: [unresolvedThread], spawn, publish,
+    })).rejects.toThrow('every unresolved review thread');
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('reports both uncertainty categories and keeps a reconciled active-thread blocker blocking', async () => {
+    const { getReviewVerdict, prepareReviewForPosting } = await import('../src/review/review-draft');
+    const draft: Parameters<typeof prepareReviewForPosting>[0] = {
+      summary: '불확실 후보와 기존 thread 상태가 있습니다.',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'blocker', kind: 'finding',
+        body: '차단 후보입니다.',
+        verification: { confidence: 'uncertain', uncertaintyReason: '외부 설정을 확인할 수 없습니다.' },
+      }],
+      replies: [],
+      existingFindings: [
+        { commentId: 4243959293, status: 'still_applies', severity: 'blocker', body: '활성 스레드 blocker입니다.' },
+        { commentId: 4243959294, status: 'uncertain', severity: null, body: '현재 호출 경로를 확인할 수 없습니다.' },
+      ],
+    };
+    const posting = prepareReviewForPosting(draft);
+
+    expect(posting.event).toBe('REQUEST_CHANGES');
+    expect(getReviewVerdict(draft)).toBe('blocked');
+    expect(posting.body).toContain('⚠️ **검증 불확실 1건**');
+    expect(posting.body).toContain('⚠️ **사람 확인 필요 1건**');
+    expect(posting.body).not.toContain('이슈 없음');
   });
 
   it('selects initial repository context before drafting and refreshes the selected sibling repositories', async () => {
@@ -182,7 +329,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const verifiedCombined = JSON.stringify({
+    const verifiedCombined = verifiedJson({
       summary: '검증 통과',
       comments: [
         { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
@@ -223,7 +370,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const reclassified = JSON.stringify({
+    const reclassified = verifiedJson({
       summary: '검증 통과',
       comments: [{
         path: 'src/adapter.ts', line: 21, side: 'RIGHT', severity: 'minor', kind: 'finding',
@@ -245,7 +392,7 @@ describe('runReviewVerificationGate', () => {
   });
 
   it('does not publish when verification downgrades a finding to a proposal', async () => {
-    const downgraded = JSON.stringify({
+    const downgraded = verifiedJson({
       summary: '검증 통과',
       comments: [{
         path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'minor', kind: 'proposal',
@@ -281,7 +428,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const escalated = JSON.stringify({
+    const escalated = verifiedJson({
       summary: '검증 통과',
       comments: [
         { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
@@ -310,7 +457,7 @@ describe('runReviewVerificationGate', () => {
       }],
       replies: [],
     });
-    const untagged = JSON.stringify({
+    const untagged = verifiedJson({
       summary: '검증 통과',
       comments: [
         { path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: '처리되지 않은 오류가 있습니다.' },
@@ -348,9 +495,21 @@ describe('runReviewVerificationGate', () => {
 
 describe('capacity recovery in review gate', () => {
   it('retries a failed Ponytail pass without rerunning the completed primary pass', async () => {
-    const primary = JSON.stringify({ summary: 'primary', comments: [], replies: [] });
+    const primary = JSON.stringify({
+      summary: 'primary',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: 'candidate',
+      }],
+      replies: [],
+    });
     const ponytail = JSON.stringify({ summary: 'lean', comments: [], replies: [] });
-    const verified = JSON.stringify({ summary: 'verified', comments: [], replies: [] });
+    const verified = verifiedJson({
+      summary: 'verified',
+      comments: [{
+        path: 'src/a.ts', line: 10, side: 'RIGHT', severity: 'important', kind: 'finding', body: 'candidate',
+      }],
+      replies: [],
+    });
     const spawn = jest.fn()
       .mockResolvedValueOnce(primary)
       .mockRejectedValueOnce(new ModelCapacityError('temporary capacity'))

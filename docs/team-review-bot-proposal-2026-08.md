@@ -65,8 +65,8 @@ Ponytail도 단순 프롬프트 옵션이 아니라, 1차 리뷰와 별개로 �
 | 7 | Ponytail 보조 리뷰 pass | 별도 fresh pass가 삭제·표준 라이브러리·플랫폼 기능·불필요한 복잡도/YAGNI 관점을 검토 | 주 리뷰가 놓칠 수 있는 단순화 기회를 보되, 이를 버그처럼 강요하지 않는다 |
 | 8 | 확인된 결함 / 개선 제안 분리 | 코드·요구사항 근거로 확인된 현재 문제와, trade-off가 있는 개선 의견을 별도 분류 | 리팩터링·구조 선호를 실제 오류처럼 과장하지 않는다 |
 | 9 | 개선 제안 품질 계약 | 개선 제안에는 제안·이점·리스크·레포 컨벤션 근거·현재 PR/후속 작업 범위가 모두 있어야 하며 Minor만 허용 | “한 번만 쓰니 지우세요” 같은 근거 부족 지적을 걸러낸다 |
-| 10 | 독립 verifier | 1차/Ponytail 후보를 만든 세션과 분리된 verifier가 실제 코드·diff를 다시 보고 유지 또는 폐기 | 한 번의 모델 판단을 그대로 신뢰하지 않는다 |
-| 11 | 삭제 전용·fail-closed gate | verifier는 후보를 버릴 수만 있다. 새 댓글·새 reply·좌표 이동·severity/body 변경·결함↔개선 제안 변환은 publisher 전에 거부 | 검증 단계가 새 오판을 만들거나 낮은 severity로 우회하지 못한다 |
+| 10 | 독립 verifier | 1차/recall/Ponytail 후보를 만든 세션과 분리된 verifier가 실제 코드·diff를 다시 보고 각 후보를 confirmed/uncertain으로 판정한다. uncertain이면 확인하지 못한 이유도 구조화한다 | 조건부 위험을 조용히 버리지 않고 사람이 근거와 한계를 함께 판단할 수 있다 |
+| 11 | 주석 전용·fail-closed gate | verifier는 모든 후보를 정확히 한 번 반환하며 verification 메타데이터만 추가할 수 있다. 새 댓글·누락·좌표 이동·severity/body 변경·결함↔개선 제안 변환은 publisher 전에 거부한다. uncertain Blocker는 게시하되 자동 REQUEST_CHANGES에는 사용하지 않는다 | 검증 단계가 후보를 소거하거나 낮은 severity로 우회하지 못하면서 불확실한 지적도 투명하게 공유한다 |
 | 12 | 단일 GitHub write 경계 | `publishVerifiedDraft()`/publisher만 review·inline comment·thread reply를 GitHub에 쓴다 | 분석 agent에 GitHub 게시 권한을 주지 않고, 게시 정책을 코드 한 곳에서 통제한다 |
 | 13 | severity·형식 강제 | Blocker/Important/Minor에 따라 review event를 코드가 정하고, GitHub Alert와 AI/bot 작성 footer를 일관되게 렌더링 | 사람 리뷰와 혼동하지 않고, 왜 막는지·어느 정도 중요한지 명확해진다 |
 | 14 | 기존 thread reply도 verdict 반영 | 신규 inline comment뿐 아니라 확인된 기존 thread 답글의 severity도 최종 event/요약에 반영 | “새 댓글이 없으니 문제 없음”이라고 잘못 Approve하는 경우를 막는다 |
@@ -192,7 +192,7 @@ GitHub review request / Discord PR URL
 | `REVIEW_AGENT` | `hermes` | PR 분석에 사용하는 실행 agent |
 | `HERMES_PROFILE` | `work` | provider 인증과 terminal backend를 가진 분석 profile |
 | `REVIEW_TIMEOUT_MIN` | 50분 | PR 하나의 분석 시간이 넘으면 종료하는 상한 |
-| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 기본 155분 | SIGTERM/SIGINT 뒤 새 리뷰를 막고 진행 중 primary·Ponytail·verifier·게시·reply 작업을 drain하는 상한. PM2 hard-kill은 4시간 |
+| `SHUTDOWN_GRACE_TIMEOUT_MIN` | 기본 255분 | SIGTERM/SIGINT 뒤 새 리뷰를 막고 진행 중 selector·primary·recall·Ponytail·verifier·게시·reply 작업을 drain하는 상한. PM2 hard-kill은 5시간 |
 | `REVIEW_CONCURRENCY` | 기본 3 | 동시에 분석할 PR 최대 수 |
 | `REPLY_MONITOR_ENABLED` | `true` | 봇 댓글에 달린 사람 답글을 감지·후속 검토 |
 | `REPLY_MONITOR_LOOKBACK_DAYS` | 기본 14일 | reply monitor가 최근에 검토한 PR을 보는 범위 |

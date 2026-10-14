@@ -6,11 +6,14 @@ import { ModelCapacityError } from '../utils/sessions_spawn';
 import {
   buildPonytailReviewPrompt,
   buildReviewDraftPrompt,
+  buildReviewRecallPrompt,
   buildReviewVerificationPrompt,
   mergeReviewDrafts,
   parsePonytailReviewDraft,
+  parseRecallReviewDraft,
   parseReviewDraft,
   reconcileExistingFindings,
+  parseVerifiedReviewDraft,
   ReviewDraft,
   validateVerifiedPonytailFindings,
   validateVerifiedProposalFindings,
@@ -42,7 +45,7 @@ const MODEL_CAPACITY_BASE_DELAY_MS = 10_000;
  * catch malformed output, policy failures, or any other semantic review error.
  */
 export async function runModelCapacityRetry<T>(
-  stage: 'selector' | 'primary' | 'ponytail' | 'verifier',
+  stage: 'selector' | 'primary' | 'recall' | 'ponytail' | 'verifier',
   invoke: () => Promise<T>,
   options: ModelCapacityRetryOptions = {},
 ): Promise<T> {
@@ -156,6 +159,25 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
   const primaryCandidate = args.reviewThreads === undefined
     ? parsedPrimary
     : validateReviewThreadAssessments(parsedPrimary, args.reviewThreads, 'primary');
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=primary, inline=${primaryCandidate.comments.length}, replies=${primaryCandidate.replies.length}`,
+  );
+
+  let correctnessCandidate = primaryCandidate;
+  if (primaryCandidate.comments.length === 0 && primaryCandidate.replies.length === 0) {
+    const recallOutput = await runModelCapacityRetry(
+      'recall',
+      () => args.spawn(buildReviewRecallPrompt(promptParams), spawnOptions),
+      args.capacityRetry,
+    );
+    const recallCandidate = parseRecallReviewDraft(recallOutput);
+    logger.info(
+      `[ReviewVerificationGate] candidate counts: stage=recall, inline=${recallCandidate.comments.length}, replies=${recallCandidate.replies.length}`,
+    );
+    correctnessCandidate = mergeReviewDrafts(primaryCandidate, recallCandidate);
+  } else {
+    logger.info('[ReviewVerificationGate] candidate counts: stage=recall, skipped=primary_non_empty');
+  }
 
   const ponytailOutput = await runModelCapacityRetry(
     'ponytail',
@@ -163,34 +185,51 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     args.capacityRetry,
   );
   const ponytailCandidate = parsePonytailReviewDraft(ponytailOutput);
-  const candidate = mergeReviewDrafts(primaryCandidate, ponytailCandidate);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=ponytail, inline=${ponytailCandidate.comments.length}, replies=${ponytailCandidate.replies.length}`,
+  );
+  const candidate = mergeReviewDrafts(correctnessCandidate, ponytailCandidate);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=merged, inline=${candidate.comments.length}, replies=${candidate.replies.length}`,
+  );
 
   const verificationOutput = await runModelCapacityRetry(
     'verifier',
     () => args.spawn(buildReviewVerificationPrompt({ ...promptParams, candidate }), spawnOptions),
     args.capacityRetry,
   );
-  const parsedVerified = parseReviewDraft(verificationOutput);
+  const parsedVerified = parseVerifiedReviewDraft(verificationOutput);
   const threadValidatedVerified = args.reviewThreads === undefined
     ? parsedVerified
     : validateReviewThreadAssessments(parsedVerified, args.reviewThreads, 'verifier');
   const verifiedDraft = validateVerifiedProposalFindings(threadValidatedVerified, candidate);
-  const reconciledFindings = args.reviewThreads === undefined
-    ? verifiedDraft.existingFindings ?? primaryCandidate.existingFindings ?? []
-    : reconcileExistingFindings(
-      primaryCandidate.existingFindings ?? [],
-      verifiedDraft.existingFindings ?? [],
-    );
+  const reconciledFindings = reconcileExistingFindings(
+    primaryCandidate.existingFindings ?? [],
+    verifiedDraft.existingFindings ?? [],
+  );
   const reconciledFindingById = new Map(reconciledFindings.map((finding) => [finding.commentId, finding]));
+  const reconciledReplies = verifiedDraft.replies.map((reply) => {
+    const assessment = reconciledFindingById.get(reply.commentId);
+    if (!assessment || (assessment.status === 'still_applies' && assessment.severity === reply.severity)) {
+      return reply;
+    }
+    return {
+      ...reply,
+      verification: {
+        confidence: 'uncertain' as const,
+        uncertaintyReason: `기존 thread 평가(${assessment.status}/${assessment.severity ?? 'none'})가 답글 후보 severity(${reply.severity})와 일치하지 않습니다. ${assessment.body}`,
+      },
+    };
+  });
   const publishableDraft: ReviewDraft = {
     ...verifiedDraft,
     existingFindings: reconciledFindings,
-    replies: verifiedDraft.replies.filter((reply) => {
-      const assessment = reconciledFindingById.get(reply.commentId);
-      return !assessment || (assessment.status === 'still_applies' && assessment.severity === reply.severity);
-    }),
+    replies: reconciledReplies,
   };
   const verified = validateVerifiedPonytailFindings(publishableDraft, candidate);
+  logger.info(
+    `[ReviewVerificationGate] candidate counts: stage=verified, inline=${verified.comments.length}, replies=${verified.replies.length}`,
+  );
 
   await args.publish(verified);
   return verified;
