@@ -75,11 +75,21 @@ describe('buildAnalysisPrompt', () => {
 
   it('requires every GitHub review/comment body to disclose bot authorship', () => {
     const prompt = buildAnalysisPrompt({ owner: 'org', repo: 'repo', prNumber: 123 });
-    const disclosureJson = BOT_AUTHOR_DISCLOSURE.replace(/\n/g, '\\n');
 
     expect(prompt).toContain('GitHub 댓글 작성자 표시 — 필수');
     expect(prompt).toContain(BOT_AUTHOR_DISCLOSURE);
     expect(prompt).toContain('전체 리뷰 body, 인라인 comments[].body, 기존 스레드 답글 body');
-    expect(prompt).toContain(`\\n\\n${disclosureJson}`);
+    expect(prompt).toContain('publisher가 footer를 추가');
+  });
+
+  it('keeps the legacy prompt read-only and does not ask the agent to cast a review vote', () => {
+    const prompt = buildAnalysisPrompt({ owner: 'org', repo: 'repo', prNumber: 123 });
+
+    expect(prompt).toContain('사람이 최종 판단');
+    expect(prompt).not.toContain('직접 게시해라');
+    expect(prompt).not.toContain('gh api -X POST');
+    expect(prompt).not.toContain('APPROVE');
+    expect(prompt).not.toContain('REQUEST_CHANGES');
+    expect(prompt).not.toContain('VERDICT:');
   });
 });

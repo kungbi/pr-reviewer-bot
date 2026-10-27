@@ -270,8 +270,8 @@ describe('runReviewVerificationGate', () => {
     };
     const posting = prepareReviewForPosting(draft);
 
-    expect(posting.event).toBe('REQUEST_CHANGES');
-    expect(getReviewVerdict(draft)).toBe('blocked');
+    expect(posting.event).toBe('COMMENT');
+    expect(getReviewVerdict(draft)).toBe('awaiting_human_review');
     expect(posting.body).toContain('⚠️ **검증 불확실 1건**');
     expect(posting.body).toContain('⚠️ **사람 확인 필요 1건**');
     expect(posting.body).not.toContain('이슈 없음');

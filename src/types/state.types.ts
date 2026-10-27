@@ -8,6 +8,7 @@ export type PRStatus =
   | 'pending_retry'
   | 'needs_reply'
   | 'pending_review'
+  | 'awaiting_human_review'
   | 'blocked'
   | 'needs_work'
   | 'approved'
@@ -21,6 +22,7 @@ export interface PRStateEntry {
   headSha?: string | null;
   reviewedAt?: string;
   reviewingAt?: string;
+  reviewingHeadSha?: string | null;
   retryCount?: number;
   failures?: Array<{ timestamp: string; error: string }>;
   lastFailedAt?: string;

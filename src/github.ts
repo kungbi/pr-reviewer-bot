@@ -80,7 +80,9 @@ const getPRDetails = createRetryFunction(async (owner: unknown, repo: unknown, p
     author: { login: pr.user?.login },
     url: pr.html_url,
     headRefName: pr.head?.ref,
+    headSha: pr.head?.sha,
     baseRefName: pr.base?.ref,
+    baseSha: pr.base?.sha,
     createdAt: pr.created_at,
     updatedAt: pr.updated_at,
     labels: pr.labels,
@@ -394,14 +396,12 @@ const postReviewCommentReply = async (owner: string, repo: string, prNumber: num
   return res.data;
 };
 
-/**
- * Post a review to a PR (APPROVE / REQUEST_CHANGES / COMMENT)
- */
-const postReview = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, body: unknown, event: unknown): Promise<unknown> => {
-  logger.info(`Posting ${event} review to ${owner}/${repo}#${prNumber}`);
+/** Post human-review material without casting an automated GitHub vote. */
+const postReview = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, body: unknown, _event: unknown): Promise<unknown> => {
+  logger.info(`Posting COMMENT review to ${owner}/${repo}#${prNumber}`);
   const res = await axios.post(
     `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
-    { body, event },
+    { body, event: 'COMMENT' },
     { headers: getHeaders() }
   );
   checkRateLimit(res.headers as Record<string, string>);
@@ -455,13 +455,12 @@ async function postInlineReviewOnce(
   prNumber: number,
   headSha: string,
   body: string,
-  event: ReviewEvent,
   comments: InlineComment[],
 ): Promise<unknown> {
   logger.info(`Posting inline review (${comments.length} comments) to ${owner}/${repo}#${prNumber}`);
   const res = await axios.post(
     `${GH_API}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
-    { commit_id: headSha, body, event, comments },
+    { commit_id: headSha, body, event: 'COMMENT', comments },
     { headers: getHeaders() },
   );
 
@@ -571,6 +570,18 @@ function completeReviewPublicationOrThrow(
   }
 }
 
+async function reconcileAttemptedReviewPublication(owner: string, repo: string, prNumber: number, headSha: string, state: ReviewedPRsState): Promise<boolean> {
+  const key = getReviewPublicationKey(owner, repo, prNumber, headSha);
+  const publication = state.getReviewPublication(key);
+  if (!publication || !publication.postAttempted || publication.owner !== owner || publication.repo !== repo || publication.prNumber !== prNumber || publication.headSha !== headSha) return false;
+  const login = await getAuthenticatedLogin();
+  if (!login || login !== publication.botLogin) return false;
+  const review = await reconcileSubmittedReview(owner, repo, prNumber, headSha, publication.operationMarker, login);
+  if (!review) return false;
+  completeReviewPublicationOrThrow(state, key, review);
+  return true;
+}
+
 /**
  * Publish one durable review operation. Once postAttempted is persisted, this
  * operation is marker-reconciliation-only and can never issue another POST.
@@ -597,14 +608,6 @@ async function postInlineReview(
   if (!publication) {
     const marker = buildReviewOperationMarker(owner, repo, prNumber, headSha, body, comments);
     const markedBody = hasExactMarkerLine(body, marker) ? body : `${marker}\n${body}`;
-    const effectiveEvent: ReviewEvent = event !== 'COMMENT'
-      && (!prAuthor || prAuthor.toLowerCase() === botLogin.toLowerCase())
-      ? 'COMMENT'
-      : event;
-
-    if (effectiveEvent !== event) {
-      logger.warn(`[github] Using COMMENT as the first review write because the PR author cannot be safely approved`);
-    }
 
     const reserved = state.reserveReviewPublication(publicationKey, {
       owner,
@@ -613,7 +616,7 @@ async function postInlineReview(
       headSha,
       botLogin,
       pendingBody: markedBody,
-      pendingEvent: effectiveEvent,
+      pendingEvent: 'COMMENT',
       pendingComments: comments,
       operationMarker: marker,
     });
@@ -634,6 +637,20 @@ async function postInlineReview(
     || publication.botLogin !== botLogin
   ) {
     throw new Error(`GitHub review publication identity mismatch for ${publicationKey}`);
+  }
+
+  if (
+    publication.status === 'pending'
+    && !publication.postAttempted
+    && publication.pendingEvent !== 'COMMENT'
+  ) {
+    if (!state.fallbackReviewPublicationToComment(publicationKey)) {
+      throw new Error(`Could not safely convert unattempted legacy GitHub review publication ${publicationKey} to COMMENT`);
+    }
+    publication = state.getReviewPublication(publicationKey);
+    if (!publication || publication.pendingEvent !== 'COMMENT' || publication.postAttempted) {
+      throw new Error(`Legacy GitHub review publication ${publicationKey} was not safely converted to COMMENT`);
+    }
   }
 
   let existing: SubmittedReview | null;
@@ -681,6 +698,9 @@ async function postInlineReview(
   if (!publication.pendingBody || !publication.pendingEvent || !publication.pendingComments) {
     throw new Error(`Incomplete pending GitHub review publication ${publicationKey}`);
   }
+  if (publication.pendingEvent !== 'COMMENT') {
+    throw new Error(`Refusing non-COMMENT GitHub review publication ${publicationKey}`);
+  }
 
   if (!state.markReviewPublicationPostAttempted(publicationKey)) {
     throw new Error(`Failed to persist GitHub review POST attempt ${publicationKey}`);
@@ -704,7 +724,6 @@ async function postInlineReview(
       prNumber,
       headSha,
       publication.pendingBody,
-      publication.pendingEvent,
       publication.pendingComments,
     );
     completeReviewPublicationOrThrow(state, publicationKey, posted);
@@ -742,14 +761,6 @@ async function postInlineReview(
       return reconciled;
     }
 
-    const status = (err as { response?: { status?: number } }).response?.status;
-    if (status === 422 && publication.pendingEvent !== 'COMMENT') {
-      if (state.fallbackReviewPublicationToComment(publicationKey)) {
-        logger.warn(`[github] ${publication.pendingEvent} review rejected (422); retrying as COMMENT`);
-        return await postInlineReview(owner, repo, prNumber, headSha, body, event, comments, state, prAuthor);
-      }
-    }
-
     const markedUnknown = state.markReviewPublicationDeliveryUnknown(publicationKey);
     const message = err instanceof Error ? err.message : String(err);
     if (!markedUnknown) {
@@ -775,5 +786,6 @@ export {
   postReview,
   getPRHeadSha,
   postInlineReview,
+  reconcileAttemptedReviewPublication,
   verifyReviewPosted,
 };

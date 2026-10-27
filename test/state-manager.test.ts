@@ -76,6 +76,46 @@ describe('ReviewedPRsState', () => {
       expect(state.isPRCompleted('owner', 'repo', 3)).toBe(true);
     });
 
+    it('treats awaiting_human_review as completed and idempotent for the same HEAD', () => {
+      state.markPRReviewed('owner', 'repo', 4, 'awaiting_human_review', 'head-sha');
+
+      expect(state.isPRCompleted('owner', 'repo', 4)).toBe(true);
+      expect(state.isPRReviewed('owner', 'repo', 4, 'head-sha')).toBe(true);
+      expect(state.isPRReviewed('owner', 'repo', 4, 'new-head-sha')).toBe(false);
+    });
+
+    it('preserves legacy statuses and vote events when loading stored state', () => {
+      const legacyPublication = {
+        createdAt: '2026-01-01T00:00:00.000Z',
+        status: 'pending',
+        owner: 'owner', repo: 'repo', prNumber: 7, headSha: 'old-head', botLogin: 'review-bot',
+        pendingBody: '<!-- legacy marker -->\\nbody', pendingEvent: 'REQUEST_CHANGES', pendingComments: [],
+        operationMarker: '<!-- legacy marker -->', postAttempted: true,
+      };
+      fs.writeFileSync(stateFile, JSON.stringify({
+        reviewedPRs: {
+          'owner/repo#5': { owner: 'owner', repo: 'repo', prNumber: 5, status: 'approved', headSha: 'a' },
+          'owner/repo#6': { owner: 'owner', repo: 'repo', prNumber: 6, status: 'needs_work', headSha: 'b' },
+          'owner/repo#8': { owner: 'owner', repo: 'repo', prNumber: 8, status: 'blocked', headSha: 'c' },
+        },
+        repliedComments: {},
+        reviewPublications: {
+          'owner/repo#7:old-head': legacyPublication,
+          'owner/repo#8:old-head': { ...legacyPublication, prNumber: 8, pendingEvent: 'APPROVE' },
+          'owner/repo#9:old-head': { ...legacyPublication, prNumber: 9, pendingEvent: 'COMMENT' },
+        },
+      }), 'utf8');
+      const reloaded = new ReviewedPRsState(stateFile);
+      reloaded.load();
+
+      expect(reloaded.data.reviewedPRs['owner/repo#5'].status).toBe('approved');
+      expect(reloaded.data.reviewedPRs['owner/repo#6'].status).toBe('needs_work');
+      expect(reloaded.data.reviewedPRs['owner/repo#8'].status).toBe('blocked');
+      expect(reloaded.data.reviewPublications?.['owner/repo#7:old-head'].pendingEvent).toBe('REQUEST_CHANGES');
+      expect(reloaded.data.reviewPublications?.['owner/repo#8:old-head'].pendingEvent).toBe('APPROVE');
+      expect(reloaded.data.reviewPublications?.['owner/repo#9:old-head'].pendingEvent).toBe('COMMENT');
+    });
+
     it('isPRCompleted returns false for reviewing/pending_retry', () => {
       state.markPRReviewing('owner', 'repo', 1);
       expect(state.isPRCompleted('owner', 'repo', 1)).toBe(false);
@@ -285,14 +325,13 @@ describe('ReviewedPRsState', () => {
       expect((reloaded as any).getReviewPublication(publicationKey).pendingBody).toBeUndefined();
     });
 
-    it('switches a definitively rejected review to an unattempted COMMENT fallback', () => {
+    it('converts an unattempted legacy vote to COMMENT but never resets an attempted publication', () => {
       const publicationKey = 'owner/repo#1:head-sha';
       expect((state as any).reserveReviewPublication(publicationKey, {
         owner: 'owner', repo: 'repo', prNumber: 1, headSha: 'head-sha', botLogin: 'review-bot',
         pendingBody: '<!-- marker -->\\nbody', pendingEvent: 'REQUEST_CHANGES', pendingComments: [],
         operationMarker: '<!-- marker -->',
       })).toBe(true);
-      expect((state as any).markReviewPublicationPostAttempted(publicationKey)).toBe(true);
 
       expect((state as any).fallbackReviewPublicationToComment(publicationKey)).toBe(true);
       expect((state as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
@@ -300,13 +339,25 @@ describe('ReviewedPRsState', () => {
         pendingEvent: 'COMMENT',
         postAttempted: false,
       }));
-      expect((state as any).markReviewPublicationDeliveryUnknown(publicationKey)).toBe(false);
+      expect((state as any).markReviewPublicationPostAttempted(publicationKey)).toBe(true);
+      expect((state as any).fallbackReviewPublicationToComment(publicationKey)).toBe(false);
       expect((state as any).getReviewPublication(publicationKey)).toEqual(expect.objectContaining({
         status: 'pending',
         pendingEvent: 'COMMENT',
-        postAttempted: false,
+        postAttempted: true,
       }));
-      expect((state as any).fallbackReviewPublicationToComment(publicationKey)).toBe(false);
+
+      const attemptedKey = 'owner/repo#2:head-sha';
+      expect((state as any).reserveReviewPublication(attemptedKey, {
+        owner: 'owner', repo: 'repo', prNumber: 2, headSha: 'head-sha', botLogin: 'review-bot',
+        pendingBody: '<!-- marker -->\\nbody', pendingEvent: 'APPROVE', pendingComments: [],
+        operationMarker: '<!-- marker -->',
+      })).toBe(true);
+      expect((state as any).markReviewPublicationPostAttempted(attemptedKey)).toBe(true);
+      expect((state as any).fallbackReviewPublicationToComment(attemptedKey)).toBe(false);
+      expect((state as any).getReviewPublication(attemptedKey)).toEqual(expect.objectContaining({
+        status: 'pending', pendingEvent: 'APPROVE', postAttempted: true,
+      }));
     });
 
     it('allows only one reservation across state instances loaded from the same file', () => {

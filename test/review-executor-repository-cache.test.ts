@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 jest.mock('../src/github', () => ({
   getPRDetails: jest.fn(),
+  getPRDiff: jest.fn(),
   getPRHeadSha: jest.fn(),
   listReviewThreads: jest.fn(),
   postInlineReview: jest.fn(),
@@ -38,6 +42,7 @@ import ReviewedPRsState from '../src/utils/state-manager';
 
 const mockGetPRDetails = getPRDetails as jest.Mock;
 const mockGetPRHeadSha = getPRHeadSha as jest.Mock;
+const mockGetPRDiff = jest.requireMock('../src/github').getPRDiff as jest.Mock;
 const mockListReviewThreads = listReviewThreads as jest.Mock;
 const mockVerifyReviewPosted = verifyReviewPosted as jest.Mock;
 const mockPostInlineReview = postInlineReview as jest.Mock;
@@ -46,9 +51,19 @@ const mockCloneRepoForPR = cloneRepoForPR as jest.Mock;
 const mockGetSharedRepositoryCache = getSharedRepositoryCache as jest.Mock;
 
 describe('executeReview persistent repository cache integration', () => {
+  let originalCwd: string;
+  let testRoot: string;
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(testRoot, { recursive: true, force: true });
+  });
   beforeEach(() => {
+    originalCwd = process.cwd();
+    testRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'review-outbox-test-'));
+    process.chdir(testRoot);
     jest.clearAllMocks();
-    mockGetPRHeadSha.mockResolvedValue('head-sha');
+    mockGetPRHeadSha.mockResolvedValue('a'.repeat(40));
+    mockGetPRDiff.mockResolvedValue('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new');
     mockListReviewThreads.mockResolvedValue([]);
     mockGetPRDetails.mockResolvedValue({
       title: 'Cross-repo contract',
@@ -56,6 +71,8 @@ describe('executeReview persistent repository cache integration', () => {
       author: { login: 'author' },
       headRefName: 'feature',
       baseRefName: 'main',
+      headSha: 'a'.repeat(40),
+      baseSha: 'b'.repeat(40),
     });
     mockVerifyReviewPosted.mockResolvedValue(true);
     mockRunReviewVerificationGate.mockResolvedValue({ summary: 'ok', comments: [], replies: [] });
@@ -63,7 +80,7 @@ describe('executeReview persistent repository cache integration', () => {
 
   it('uses the cached PR worktree and supplies selector context before review', async () => {
     const cache = {
-      preparePRWorkspace: jest.fn().mockResolvedValue({ ok: true, path: '/tmp/pr-worktree', headSha: 'workspace-head-sha' }),
+      preparePRWorkspace: jest.fn().mockResolvedValue({ ok: true, path: '/tmp/pr-worktree', headSha: 'a'.repeat(40) }),
       cleanupPRWorkspace: jest.fn().mockResolvedValue(undefined),
       getCatalog: jest.fn().mockReturnValue([
         {
@@ -86,7 +103,11 @@ describe('executeReview persistent repository cache integration', () => {
       markPRReviewed: jest.fn(),
     } as unknown as ReviewedPRsState;
 
-    await expect(executeReview('org', 'api', 123, state)).resolves.toMatchObject({ success: true });
+    await expect(executeReview('org', 'api', 123, state)).resolves.toMatchObject({
+      success: true,
+      verdict: 'awaiting_human_review',
+      commentPosted: true,
+    });
 
     expect(cache.preparePRWorkspace).toHaveBeenCalledWith({ owner: 'org', repo: 'api', prNumber: 123 });
     expect(mockCloneRepoForPR).not.toHaveBeenCalled();
@@ -103,8 +124,11 @@ describe('executeReview persistent repository cache integration', () => {
     expect(cache.refreshRepositories).toHaveBeenCalledWith(['org/worker']);
     await gateArgs.publish({ summary: 'verified', comments: [], replies: [] });
     expect(mockPostInlineReview).toHaveBeenCalledWith(
-      'org', 'api', 123, 'workspace-head-sha', expect.any(String), 'APPROVE', [],
+      'org', 'api', 123, 'a'.repeat(40), expect.any(String), 'COMMENT', [],
       state, 'author',
+    );
+    expect(state.markPRReviewed).toHaveBeenCalledWith(
+      'org', 'api', 123, 'awaiting_human_review', 'a'.repeat(40),
     );
     expect(cache.cleanupPRWorkspace).toHaveBeenCalledWith('/tmp/pr-worktree');
   });

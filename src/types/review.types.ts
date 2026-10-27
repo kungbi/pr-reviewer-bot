@@ -1,4 +1,5 @@
 export type ReviewVerdict =
+  | 'awaiting_human_review'
   | 'reviewed'
   | 'blocked'
   | 'needs_work'

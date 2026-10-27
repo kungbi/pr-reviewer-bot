@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import axios from 'axios';
-import { postInlineReview } from '../src/github';
+import { postInlineReview, postReview, reconcileAttemptedReviewPublication } from '../src/github';
 import ReviewedPRsState from '../src/utils/state-manager';
 
 jest.mock('axios');
@@ -48,6 +48,29 @@ describe('postInlineReview idempotency', () => {
       return { data: getReviews(), headers: {} } as any;
     });
   };
+
+  it.each([true, false])('read-only recovery honors exact marker match: %s', async (match) => {
+    const marker = '<!-- pr-reviewer-bot:review:recovery -->';
+    state.reserveReviewPublication(publicationKey, { owner, repo, prNumber, headSha, botLogin: 'review-bot', pendingBody: body, pendingEvent: 'COMMENT', pendingComments: [], operationMarker: marker });
+    state.markReviewPublicationPostAttempted(publicationKey);
+    mockReviewReads(() => [{ id: 5, user: { login: 'review-bot' }, commit_id: headSha, state: 'COMMENTED', body: match ? marker : `quoted ${marker}` }]);
+    await expect(reconcileAttemptedReviewPublication(owner, repo, prNumber, headSha, state)).resolves.toBe(match);
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+    expect(state.getReviewPublication(publicationKey)?.status).toBe(match ? 'completed' : 'pending');
+  });
+
+  it('forces COMMENT for the generic review write helper despite a legacy vote argument', async () => {
+    mockedAxios.post.mockResolvedValueOnce({ data: { id: 18, state: 'COMMENTED' }, headers: {} } as any);
+
+    await expect(postReview(owner, repo, prNumber, body, 'REQUEST_CHANGES'))
+      .resolves.toEqual({ id: 18, state: 'COMMENTED' });
+
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      expect.stringContaining(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`),
+      { body, event: 'COMMENT' },
+      expect.any(Object),
+    );
+  });
 
   it('reconciles an ambiguous response when GitHub already persisted the exact marked review', async () => {
     let postedBody = '';
@@ -96,22 +119,98 @@ describe('postInlineReview idempotency', () => {
     }));
   });
 
-  it('falls back to COMMENT after an explicit 422 rejection and confirms the fallback once', async () => {
+  it('uses COMMENT as the only first write even when the caller requests changes', async () => {
     mockReviewReads(() => []);
-    mockedAxios.post
-      .mockRejectedValueOnce(Object.assign(new Error('Request failed with status code 422'), {
-        response: { status: 422 },
-      }))
-      .mockResolvedValueOnce({ data: { id: 11, state: 'COMMENTED' }, headers: {} } as any);
+    mockedAxios.post.mockImplementationOnce(async (_url, payload) => {
+      expect((payload as { event: string }).event).toBe('COMMENT');
+      expect((state.data as any).reviewPublications[publicationKey].pendingEvent).toBe('COMMENT');
+      return { data: { id: 11, state: 'COMMENTED' }, headers: {} } as any;
+    });
 
     await expect(callReview('REQUEST_CHANGES')).resolves.toEqual({ id: 11, state: 'COMMENTED' });
 
-    expect(mockedAxios.post).toHaveBeenCalledTimes(2);
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
     expect(mockedAxios.post.mock.calls.map(([, payload]) => (payload as { event: string }).event))
-      .toEqual(['REQUEST_CHANGES', 'COMMENT']);
+      .toEqual(['COMMENT']);
     expect((state.data as any).reviewPublications[publicationKey]).toEqual(expect.objectContaining({
       status: 'completed',
       reviewId: 11,
+      postAttempted: true,
+    }));
+  });
+
+  it('converts an unattempted legacy approval reservation to COMMENT before writing', async () => {
+    const marker = '<!-- pr-reviewer-bot:review:legacy-unattempted -->';
+    (state.data as any).reviewPublications = {
+      [publicationKey]: {
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        botLogin: 'review-bot',
+        pendingBody: `${marker}\n${body}`,
+        pendingEvent: 'APPROVE',
+        pendingComments: [],
+        operationMarker: marker,
+        postAttempted: false,
+      },
+    };
+    state.save();
+    const recoveredState = new ReviewedPRsState(stateFile);
+    recoveredState.load();
+    mockReviewReads(() => []);
+    mockedAxios.post.mockImplementationOnce(async (_url, payload) => {
+      expect((payload as { event: string }).event).toBe('COMMENT');
+      expect((recoveredState.data as any).reviewPublications[publicationKey].pendingEvent).toBe('COMMENT');
+      return { data: { id: 16, state: 'COMMENTED' }, headers: {} } as any;
+    });
+
+    await expect(callReview('APPROVE', 'author', recoveredState)).resolves.toEqual({ id: 16, state: 'COMMENTED' });
+
+    expect(mockedAxios.post).toHaveBeenCalledTimes(1);
+    expect((mockedAxios.post.mock.calls[0][1] as { event: string }).event).toBe('COMMENT');
+  });
+
+  it('reconciles an attempted legacy voting publication but never writes it again', async () => {
+    const marker = '<!-- pr-reviewer-bot:review:legacy-attempted -->';
+    (state.data as any).reviewPublications = {
+      [publicationKey]: {
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        botLogin: 'review-bot',
+        pendingBody: `${marker}\n${body}`,
+        pendingEvent: 'REQUEST_CHANGES',
+        pendingComments: [],
+        operationMarker: marker,
+        postAttempted: true,
+      },
+    };
+    state.save();
+    const recoveredState = new ReviewedPRsState(stateFile);
+    recoveredState.load();
+    mockReviewReads(() => [{
+      id: 17,
+      user: { login: 'review-bot' },
+      commit_id: headSha,
+      state: 'CHANGES_REQUESTED',
+      body: `${marker}\n${body}`,
+    }]);
+
+    await expect(callReview('REQUEST_CHANGES', 'author', recoveredState)).resolves.toMatchObject({
+      id: 17,
+      state: 'CHANGES_REQUESTED',
+    });
+
+    expect(mockedAxios.post).not.toHaveBeenCalled();
+    expect((recoveredState.data as any).reviewPublications[publicationKey]).toEqual(expect.objectContaining({
+      status: 'completed',
+      reviewId: 17,
       postAttempted: true,
     }));
   });

@@ -1,5 +1,6 @@
 import { publishVerifiedDraft } from '../src/review/review-publisher';
 import { ReviewDraft } from '../src/review/review-draft';
+import * as reviewDraftModule from '../src/review/review-draft';
 import { BOT_AUTHOR_DISCLOSURE } from '../src/utils/comment-disclosure';
 import type ReviewedPRsState from '../src/utils/state-manager';
 
@@ -89,6 +90,30 @@ describe('publishVerifiedDraft', () => {
     expect(postReviewCommentReply).toHaveBeenCalledWith(
       'org', 'repo', 123, 11,
       expect.stringContaining('🟡 **Important**'),
+    );
+  });
+
+  it('forces COMMENT at the publisher boundary even when prepared material requests changes', async () => {
+    const prepareSpy = jest.spyOn(reviewDraftModule, 'prepareReviewForPosting').mockReturnValue({
+      body: 'verified body',
+      event: 'REQUEST_CHANGES',
+      comments: [],
+      replies: [],
+    });
+    const postInlineReview = jest.fn().mockResolvedValue({ id: 1 });
+    const postReviewCommentReply = jest.fn();
+
+    try {
+      await publishVerifiedDraft({
+        owner: 'org', repo: 'repo', prNumber: 123, headSha: 'abc123', prAuthor: 'author', state,
+        draft, postInlineReview, postReviewCommentReply,
+      });
+    } finally {
+      prepareSpy.mockRestore();
+    }
+
+    expect(postInlineReview).toHaveBeenCalledWith(
+      'org', 'repo', 123, 'abc123', 'verified body', 'COMMENT', [], state, 'author',
     );
   });
 });

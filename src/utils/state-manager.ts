@@ -93,7 +93,14 @@ class ReviewedPRsState {
 
   private withReviewPublicationLock(operation: () => boolean, refreshBeforeOperation = true): boolean {
     const lockFilePath = `${this.stateFilePath}.review-publication.lock`;
-    fs.mkdirSync(path.dirname(this.stateFilePath), { recursive: true });
+    const stateDir = path.resolve(path.dirname(this.stateFilePath));
+    fs.mkdirSync(stateDir, { recursive: true });
+    // Persist the directory chain too, including after a previous mkdir/sync
+    // failed: an existing directory is not proof its parent entry is durable.
+    for (let child = stateDir; path.dirname(child) !== child; child = path.dirname(child)) {
+      const parentFd = fs.openSync(path.dirname(child), 'r');
+      try { fs.fsyncSync(parentFd); } finally { fs.closeSync(parentFd); }
+    }
     let lockFd: number;
     try {
       lockFd = fs.openSync(lockFilePath, 'wx');
@@ -152,8 +159,20 @@ class ReviewedPRsState {
 
   private writeStateFile(): void {
     const tempFilePath = `${this.stateFilePath}.tmp`;
-    fs.writeFileSync(tempFilePath, JSON.stringify(this.data, null, 2), 'utf8');
+    const fd = fs.openSync(tempFilePath, 'w');
+    try {
+      fs.writeFileSync(fd, JSON.stringify(this.data, null, 2), 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tempFilePath, this.stateFilePath);
+    const dirFd = fs.openSync(path.dirname(this.stateFilePath), 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
   }
 
   save(): void {
@@ -220,7 +239,10 @@ class ReviewedPRsState {
     const key = this._getPRKey(owner, repo, prNumber);
     const pr = this.data.reviewedPRs[key];
     if (!pr) return false;
-    return pr.status === 'reviewed' || pr.status === 'completed' || pr.status === 'skipped';
+    return pr.status === 'reviewed'
+      || pr.status === 'completed'
+      || pr.status === 'skipped'
+      || pr.status === 'awaiting_human_review';
   }
 
   /**
@@ -249,7 +271,7 @@ class ReviewedPRsState {
    * Mark PR as currently in-progress before starting the review.
    * This prevents duplicate reviews across cron cycles (race condition lock).
    */
-  markPRReviewing(owner: string, repo: string, prNumber: number): void {
+  markPRReviewing(owner: string, repo: string, prNumber: number, headSha: string | null = null): void {
     const key = this._getPRKey(owner, repo, prNumber);
     const existing = this.data.reviewedPRs[key];
     this.data.reviewedPRs[key] = {
@@ -259,8 +281,24 @@ class ReviewedPRsState {
       prNumber,
       status: 'reviewing',
       reviewingAt: new Date().toISOString(),
+      reviewingHeadSha: headSha,
     };
     this.save();
+  }
+
+  releaseReviewingAtRevision(owner: string, repo: string, prNumber: number, headSha: string): boolean {
+    return this.withReviewPublicationLock(() => {
+      if (!fs.existsSync(this.stateFilePath)) return false;
+      this.loadReviewPublicationStateStrict();
+      const entry = this.data.reviewedPRs[this._getPRKey(owner, repo, prNumber)];
+      if (entry?.status !== 'reviewing' || !entry.reviewingHeadSha
+        || entry.reviewingHeadSha.toLowerCase() !== headSha.toLowerCase()) return false;
+      entry.status = 'pending_retry';
+      delete entry.reviewingAt;
+      delete entry.reviewingHeadSha;
+      this.save();
+      return true;
+    }, false);
   }
 
   markPRReviewed(owner: string, repo: string, prNumber: number, status: PRStatus = 'reviewed', headSha: string | null = null): void {
@@ -446,6 +484,15 @@ class ReviewedPRsState {
     return this.data.reviewPublications?.[publicationKey];
   }
 
+  getDurableReviewPublication(publicationKey: string): ReviewPublication | undefined {
+    let publication: ReviewPublication | undefined;
+    if (!this.withReviewPublicationLock(() => {
+      publication = this.data.reviewPublications?.[publicationKey];
+      return true;
+    })) throw new Error('Cannot inspect durable review publication state');
+    return publication;
+  }
+
   reserveReviewPublication(publicationKey: string, publication: NewReviewPublication): boolean {
     return this.withReviewPublicationLock(() => {
       if (this.data.reviewPublications?.[publicationKey]) return false;
@@ -477,13 +524,12 @@ class ReviewedPRsState {
       if (
         !publication
         || publication.status !== 'pending'
-        || !publication.postAttempted
+        || publication.postAttempted
         || !publication.pendingEvent
         || publication.pendingEvent === 'COMMENT'
       ) return false;
 
       publication.pendingEvent = 'COMMENT';
-      publication.postAttempted = false;
       this.save();
       return true;
     });
@@ -530,7 +576,9 @@ class ReviewedPRsState {
   }
 
   getPRsForReplyMonitoring(lookbackDays: number | null = null): PRStateEntry[] {
-    const monitorable: PRStatus[] = ['reviewed', 'completed', 'blocked', 'needs_work', 'approved'];
+    const monitorable: PRStatus[] = [
+      'reviewed', 'completed', 'awaiting_human_review', 'blocked', 'needs_work', 'approved',
+    ];
     const minReviewedAtMs = lookbackDays && lookbackDays > 0
       ? Date.now() - lookbackDays * 24 * 60 * 60 * 1000
       : null;
@@ -660,7 +708,9 @@ class ReviewedPRsState {
    * are kept regardless of age. Returns the number of entries removed.
    */
   pruneOldEntries(maxAgeMs: number): number {
-    const terminal: PRStatus[] = ['reviewed', 'completed', 'skipped', 'approved', 'needs_work', 'blocked', 'error'];
+    const terminal: PRStatus[] = [
+      'reviewed', 'completed', 'skipped', 'awaiting_human_review', 'approved', 'needs_work', 'blocked', 'error',
+    ];
     const now = Date.now();
     let removed = 0;
     for (const key of Object.keys(this.data.reviewedPRs)) {

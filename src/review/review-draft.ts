@@ -1,4 +1,4 @@
-import { InlineComment, ReviewEvent, ReviewMemoryContext, ReviewThread, ReviewVerdict } from '../types';
+import { InlineComment, ReviewEvent, ReviewMemoryContext, ReviewThread } from '../types';
 import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
 import { buildSelectedRepositoryContextSection, SelectedRepositoryContext } from './repository-selection';
 
@@ -147,7 +147,7 @@ ${untrustedJson}
 - 각 활성 thread마다 \`existingFindings\`에 정확히 한 건을 반환한다: 계속 유효하면 \`still_applies\`와 현재 severity, 코드에서 해결됐으면 \`fixed_in_code\`, 현재 코드에서 잘못된/적용 불가 지적이면 \`not_actionable\`, 근거가 부족하면 severity \`null\`인 \`uncertain\`.
 - 같은 미해결 지적이 여전히 Minor이고 새 근거가 없으면 불필요한 답글은 달지 말고 assessment에 남겨라. 게시자는 이를 최종 요약에 표시한다.
 - 지적이 여전히 유효하고 이전보다 severity를 실질적으로 높여야 하거나 새 재현 근거·보완 해결책이 있으면 root \`commentId\`에 답글을 추가해 근거와 영향도를 설명한다. 같은 내용을 새 인라인 코멘트로 중복하지 마라.
-- 검증하지 못한 지적을 “이슈 없음”으로 처리하지 마라. \`uncertain\`은 자동 승인하지 않고 사람 확인이 필요한 상태다.
+- 검증하지 못한 지적을 “이슈 없음”으로 처리하지 마라. \`uncertain\`은 사람 확인이 필요한 상태다.
 - 이미 봇이 답했고 사람이 반박한 동일 스레드는 논쟁을 반복하지 않는다. 새 근거가 있어도 한 번의 재검토 답글까지만 허용하고, 이후에는 사람 판단으로 남겨라.`;
 }
 
@@ -200,7 +200,7 @@ export function buildReviewDraftPrompt(params: ReviewPromptParams): string {
   return `너는 ${params.owner}/${params.repo} PR #${params.prNumber}의 1차 코드 리뷰어다. 한국어로 작성.
 
 ## 매우 중요한 역할 경계
-이번 단계의 산출물은 **후보 초안만 작성**하는 것이다. GitHub에 댓글·리뷰·답글을 게시하지 마라. \`gh api\`의 쓰기 요청, \`gh pr review\`, curl POST 등 원격 상태를 바꾸는 명령을 절대 실행하지 마라. 최종 게시는 별도 검증 단계가 끝난 뒤 봇 프로세스가 수행한다.
+이번 단계의 산출물은 **후보 초안만 작성**하는 것이다. GitHub에 댓글·리뷰·답글을 게시하지 마라. \`gh api\`의 쓰기 요청, \`gh pr review\`, curl POST 등 원격 상태를 바꾸는 명령을 절대 실행하지 마라. 최종 publisher는 별도 검증을 통과한 자료를 COMMENT로만 게시하며, 사람이 최종 판단한다.
 
 ## 탐색
 ${buildExplorationSection(params)}${buildExistingReviewThreadsSection(params.reviewThreads)}${buildReviewMemorySection(params.reviewMemory)}
@@ -257,19 +257,19 @@ ${buildExplorationSection(params)}${buildExistingReviewThreadsSection(params.rev
 - footer/작성자 표시는 넣지 마라. 게시 프로세스가 강제 추가한다.
 - body에는 읽기 쉬운 Markdown을 사용한다. 결론/영향/수정 요구 같은 짧은 레이블만 **굵게** 표시하고, 파일명·함수명·필드명·API 키·값은 \`인라인 코드\`로 감싼다. 전체를 인용문(\`>\`)으로 감싸거나, 빈 인용문 줄을 만들지 마라. 긴 파일 경로는 본문에서 반복하지 말고 필요한 경우 파일명과 라인만 쓴다.
 - comments/replies가 없으면 빈 배열을 반환한다. 활성 기존 thread가 없으면 existingFindings도 빈 배열이다.
-- replies도 최종 리뷰의 이슈 집계와 승인 이벤트에 반영된다. 기존 스레드에 추가하는 내용이 버그/위험이면 해당 severity를 반드시 지정하고, 단순 감사·확인 답글은 후보에 넣지 마라.
+- replies도 사람이 확인할 이슈 요약에 severity별로 반영된다. 기존 스레드에 추가하는 내용이 버그/위험이면 해당 severity를 반드시 지정하고, 단순 감사·확인 답글은 후보에 넣지 마라.
 - 이슈를 발견하지 못한 것은 실패가 아니다. 억지로 채우지 마라.`;
 }
 
 /**
  * Runs only when the primary correctness pass returns no findings. This fresh
- * pass challenges an LGTM result without weakening the delete-only verifier.
+ * pass checks for missed issues without weakening the delete-only verifier.
  */
 export function buildReviewRecallPrompt(params: ReviewPromptParams): string {
   return `너는 ${params.owner}/${params.repo} PR #${params.prNumber}의 **독립 누락 탐지 리뷰어**다. 한국어로 작성.
 
 ## 역할 경계
-1차 리뷰의 빈 결과를 신뢰하지 마라. 이번 단계는 LGTM으로 끝내기 전에 놓친 정확성·보안·신뢰성 결함이 없는지 독립적으로 반증하는 후보 초안 단계다.
+1차 리뷰의 빈 결과를 신뢰하지 마라. 이번 단계는 결과가 양호하다고 단정하기 전에 놓친 정확성·보안·신뢰성 결함이 없는지 독립적으로 반증하는 후보 초안 단계다.
 GitHub에 댓글·리뷰·답글을 게시하지 마라. 로컬 파일·git 상태도 수정하지 마라. \`gh api\`의 쓰기 요청, \`gh pr review\`, curl POST 등 원격 상태를 바꾸는 명령을 절대 실행하지 마라.
 
 ## 탐색
@@ -905,28 +905,12 @@ function formatReviewCommentBody(comment: DraftComment): string {
   return `${SEVERITY_PRESENTATION[comment.severity]} — ${withoutExistingLabel}${rationale}${formatVerificationRationale(comment.verification)}`;
 }
 
-export function getReviewEvent(draft: ReviewDraft): ReviewEvent {
-  const counts = getReviewSeverityCounts(draft);
-  const hasConfirmedCandidateBlocker = [...draft.comments, ...draft.replies]
-    .some((finding) => finding.severity === 'blocker'
-      && finding.verification?.confidence !== 'uncertain');
-  const hasActiveThreadBlocker = (draft.existingFindings ?? [])
-    .some((finding) => finding.status === 'still_applies' && finding.severity === 'blocker');
-  if (hasConfirmedCandidateBlocker || hasActiveThreadBlocker) return 'REQUEST_CHANGES';
-  if (counts.blocker > 0 || counts.important > 0 || getUncertainExistingFindingCount(draft) > 0) return 'COMMENT';
-  return 'APPROVE';
+export function getReviewEvent(_draft: ReviewDraft): ReviewEvent {
+  return 'COMMENT';
 }
 
-export function getReviewVerdict(draft: ReviewDraft): ReviewVerdict {
-  const counts = getReviewSeverityCounts(draft);
-  const hasConfirmedCandidateBlocker = [...draft.comments, ...draft.replies]
-    .some((finding) => finding.severity === 'blocker'
-      && finding.verification?.confidence !== 'uncertain');
-  const hasActiveThreadBlocker = (draft.existingFindings ?? [])
-    .some((finding) => finding.status === 'still_applies' && finding.severity === 'blocker');
-  if (hasConfirmedCandidateBlocker || hasActiveThreadBlocker) return 'blocked';
-  if (counts.blocker > 0 || counts.important > 0 || getUncertainExistingFindingCount(draft) > 0) return 'needs_work';
-  return 'approved';
+export function getReviewVerdict(_draft: ReviewDraft): 'awaiting_human_review' {
+  return 'awaiting_human_review';
 }
 
 function formatReviewReplyBody(

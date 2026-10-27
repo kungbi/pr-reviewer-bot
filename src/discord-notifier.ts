@@ -130,34 +130,20 @@ async function sendPRAssignedNotification({ repoOwner, repoName, prNumber, prTit
 /**
  * Notify when a review is completed
  */
-async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle, prAuthor = null, prHeadBranch = null, prBaseBranch = null, issuesFound = [] }: NotificationData): Promise<boolean> {
+async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle, prAuthor = null, prHeadBranch = null, prBaseBranch = null, issuesFound = [], localReportStatus }: NotificationData): Promise<boolean> {
   const hasIssues = issuesFound && issuesFound.length > 0;
 
-  let color: number;
-  let statusEmoji: string;
-  let statusText: string;
-
-  if (!hasIssues) {
-    color = 0x10B981; // Green
-    statusEmoji = '✅';
-    statusText = 'LGTM! No issues found.';
-  } else {
-    const severitySummary = issuesFound!.join(' · ');
-    if (severitySummary.includes('🔴')) {
-      color = 0xEF4444; // Red: blocker present
-      statusEmoji = '🔴';
-    } else if (severitySummary.includes('🟡')) {
-      color = 0xF59E0B; // Amber: important findings only
-      statusEmoji = '🟡';
-    } else if (severitySummary.includes('🟢')) {
-      color = 0x10B981; // Green: minor findings only
-      statusEmoji = '🟢';
-    } else {
-      color = 0xEF4444; // Preserve the existing fallback for generic issue text.
-      statusEmoji = '⚠️';
-    }
-    statusText = severitySummary;
-  }
+  const severitySummary = hasIssues ? issuesFound!.join(' · ') : '';
+  const decisionText = 'Review material is ready. Human decision required.';
+  const reportStatusText = localReportStatus === 'generated'
+    ? 'Local HTML report was generated locally, but is not delivered or linked through Discord.'
+    : localReportStatus === 'unavailable'
+      ? 'Local HTML report is unavailable and was not shared through Discord.'
+      : '';
+  const statusText = [
+    hasIssues ? `${decisionText} Findings: ${severitySummary}` : decisionText,
+    reportStatusText,
+  ].filter(Boolean).join(' ');
 
   const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
   const repoName = `${owner}/${repo}`;
@@ -183,9 +169,9 @@ async function sendReviewCompletedNotification({ owner, repo, prNumber, prTitle,
   }
 
   const embed = buildEmbed({
-    title: `${statusEmoji} Review Completed - #${prNumber}`,
+    title: `📝 Review Ready - #${prNumber}`,
     description: `**${prTitle}**\n${statusText}`,
-    color,
+    color: 0x3B82F6,
     url: prUrl,
     fields,
   });

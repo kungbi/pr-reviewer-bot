@@ -26,6 +26,7 @@ export interface NotificationData {
   prHeadBranch?: string | null;
   prBaseBranch?: string | null;
   issuesFound?: string[];
+  localReportStatus?: 'generated' | 'unavailable';
   action?: string;
   commenter?: string;
   commentId?: string | number;

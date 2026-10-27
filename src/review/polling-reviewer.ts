@@ -10,6 +10,7 @@ import { postComment } from '../github';
 import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
 import config from '../utils/config';
 import logger from '../utils/logger';
+import { ReportPublicationAmbiguousError, ReportRecoveryError } from './review-report-outbox';
 import { ModelCapacityError } from '../utils/sessions_spawn';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
 
@@ -44,6 +45,11 @@ async function executeReviewWithRetry(
     const errMsg = err instanceof Error ? err.message : String(err);
     const timestamp = new Date().toISOString();
 
+    if (err instanceof ReportPublicationAmbiguousError || err instanceof ReportRecoveryError) {
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg);
+      logger.error(`[PollingReviewer] ${prLabel}: ${errMsg}; no fallback GitHub write will be attempted`);
+      return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
+    }
     if (err instanceof ModelCapacityError) {
       state.markPRCapacityRetry(owner, repo, prNumber, errMsg);
       logger.warn(

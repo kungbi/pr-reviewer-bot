@@ -34,7 +34,7 @@ describe('sendDiscordNotification', () => {
 });
 
 describe('sendReviewCompletedNotification', () => {
-  it('sends green embed when no issues found', async () => {
+  it('says review material is ready for human decision when no findings exist', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
     const result = await sendReviewCompletedNotification({
       owner: 'org', repo: 'repo', prNumber: 2,
@@ -42,17 +42,49 @@ describe('sendReviewCompletedNotification', () => {
     });
     expect(result).toBe(true);
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.embeds[0].color).toBe(0x10B981);
+    expect(body.embeds[0].color).toBe(0x3B82F6);
+    expect(body.embeds[0].title).toContain('Review Ready');
+    expect(body.embeds[0].description).toContain('Review material is ready');
+    expect(body.embeds[0].description).toContain('Human decision required');
+    expect(body.embeds[0].description).not.toContain('LGTM');
+    expect(body.embeds[0].description).not.toContain('approved');
   });
 
-  it('sends red embed when issues found', async () => {
+  it('keeps a neutral notification when findings exist', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
     await sendReviewCompletedNotification({
       owner: 'org', repo: 'repo', prNumber: 3,
       prTitle: 'Buggy PR', issuesFound: ['Bug 1', 'Bug 2'],
     });
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(body.embeds[0].color).toBe(0xEF4444);
+    expect(body.embeds[0].color).toBe(0x3B82F6);
+    expect(body.embeds[0].description).toContain('Human decision required');
+    expect(body.embeds[0].fields.find((f: { name: string }) => f.name === 'Issues Found').value)
+      .toContain('Bug 1');
+  });
+
+  it.each([
+    ['generated', 'generated locally, but is not delivered or linked through Discord'],
+    ['unavailable', 'unavailable and was not shared through Discord'],
+  ])('states the %s report status without uploading, linking, or leaking its local path', async (status, message) => {
+    mockFetch.mockResolvedValueOnce({ ok: true, text: async () => '' });
+    const localPath = '/synthetic-private-state/review-reports/acme__repo__3__abc.html';
+    await sendReviewCompletedNotification({
+      owner: 'org', repo: 'repo', prNumber: 31,
+      prTitle: 'Local report delivery boundary', issuesFound: [],
+      localReportStatus: status,
+      localReportPath: localPath,
+    } as any);
+
+    const payload = JSON.parse(mockFetch.mock.calls[0][1].body);
+    const serialized = JSON.stringify(payload);
+    expect(payload.embeds[0].description).toContain(message);
+    expect(serialized).not.toContain(localPath);
+    expect(serialized).not.toContain('.html');
+    expect(serialized).not.toContain('file://');
+    expect(payload.files).toBeUndefined();
+    expect(payload.attachments).toBeUndefined();
+    expect(mockFetch.mock.calls[0][0]).toBe(process.env.DISCORD_WEBHOOK_URL);
   });
 
   it('shows the severity breakdown in the completion summary instead of a generic issue count', async () => {
@@ -65,6 +97,7 @@ describe('sendReviewCompletedNotification', () => {
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.embeds[0].description).toContain('🔴 **Blocker 1건** · 🟡 **Important 2건** · 🟢 **Minor 1건**');
+    expect(body.embeds[0].description).toContain('Human decision required');
     expect(body.embeds[0].fields.find((f: { name: string }) => f.name === 'Issues Found').value)
       .toContain('Blocker 1건');
   });

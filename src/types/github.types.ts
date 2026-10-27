@@ -6,7 +6,9 @@ export interface PRDetails {
   author: { login: string };
   url: string;
   headRefName: string;
+  headSha?: string;
   baseRefName: string;
+  baseSha?: string;
   createdAt: string;
   updatedAt: string;
   labels: unknown[];

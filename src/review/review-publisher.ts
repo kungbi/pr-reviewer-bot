@@ -11,6 +11,7 @@ export interface PublishVerifiedDraftArgs {
   prAuthor: string | null;
   state: ReviewedPRsState;
   draft: ReviewDraft;
+  beforeFirstReply?: () => void;
   postInlineReview: (
     owner: string,
     repo: string,
@@ -41,6 +42,7 @@ export async function publishVerifiedDraft(args: PublishVerifiedDraftArgs): Prom
   const posting = prepareReviewForPosting(args.draft);
   const replyUrls: string[] = [];
 
+  if (posting.replies.length !== 0) args.beforeFirstReply?.();
   for (const reply of posting.replies) {
     const postedReply = await args.postReviewCommentReply(
       args.owner,
@@ -68,7 +70,7 @@ export async function publishVerifiedDraft(args: PublishVerifiedDraftArgs): Prom
     args.prNumber,
     args.headSha,
     body,
-    posting.event,
+    'COMMENT',
     posting.comments,
     args.state,
     args.prAuthor,

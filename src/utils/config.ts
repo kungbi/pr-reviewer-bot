@@ -5,7 +5,10 @@
  */
 
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+dotenv.config({
+  override: true,
+  ...(process.env.NODE_ENV === 'test' ? { path: '/dev/null', quiet: true } : {}),
+});
 
 // Note: .env is loaded here with override=true so PM2's stale --update-env
 // snapshot cannot keep an old REVIEW_AGENT/CODEX_MODEL after .env changes.
@@ -51,6 +54,22 @@ function optionalBool(name: string, defaultValue: boolean): boolean {
     return defaultValue;
   }
   return value.trim() === 'true' || value.trim() === '1';
+}
+
+// This deliberately accepts only a flat JSON object with literal, canonical keys
+// and IDs. Reject duplicates rather than silently accepting JSON's last value.
+function trustedNodeImages(): Readonly<Record<string, string>> {
+  const raw = process.env.REVIEW_TRUSTED_NODE_IMAGES;
+  if (raw === undefined) return Object.freeze({});
+  const entry = '"((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))"\\s*:\\s*"(sha256:[a-f0-9]{64})"';
+  const grammar = new RegExp(`^\\s*\\{\\s*(?:${entry}(?:\\s*,\\s*${entry})*)?\\s*\\}\\s*$`);
+  if (!grammar.test(raw)) throw new Error('[config] REVIEW_TRUSTED_NODE_IMAGES must be a JSON object mapping exact Node versions to lowercase sha256 image IDs');
+  const images: Record<string, string> = {};
+  for (const match of raw.matchAll(new RegExp(entry, 'g'))) {
+    if (Object.prototype.hasOwnProperty.call(images, match[1])) throw new Error('[config] REVIEW_TRUSTED_NODE_IMAGES contains a duplicate version');
+    images[match[1]] = match[2];
+  }
+  return Object.freeze(images);
 }
 
 // ── Config Object ─────────────────────────────────────────────────────────────
@@ -170,6 +189,9 @@ const config = {
   repositoryCacheEnabled: optionalBool('REPOSITORY_CACHE_ENABLED', true),
   repositoryCacheDirectory: optional('REPOSITORY_CACHE_DIRECTORY', 'state/repository-cache') as string,
   repositoryCacheGitTimeoutMs: optionalIntAtLeast('REPOSITORY_CACHE_GIT_TIMEOUT_MS', 300000, 1000),
+
+  // Operator-owned trust roots; never read from a PR checkout.
+  trustedNodeImages: trustedNodeImages(),
 
   // Review agent CLI timeout for the review subagent (minutes → ms)
   reviewTimeoutMs: reviewTimeoutMin * 60 * 1000,

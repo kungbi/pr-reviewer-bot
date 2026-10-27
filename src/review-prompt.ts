@@ -92,7 +92,6 @@ export function buildAnalysisPrompt({ owner, repo, prNumber, clonePath, isReRevi
     : '';
 
   const reviewMemorySection = buildReviewMemorySection(reviewMemory);
-  const botAuthorDisclosureJson = BOT_AUTHOR_DISCLOSURE.replace(/\n/g, '\\n');
 
   return `${owner}/${repo} 레포의 PR #${prNumber}를 리뷰해줘. 한국어로 작성.
 
@@ -150,93 +149,43 @@ ${explorationSection}${conventionSection}${reReviewSection}${reviewMemorySection
 - 🟢 Minor — **최대 3개까지만**. 가장 가치 있는 것만 골라라. 나머지 사소한 건 버려라.
 - 리뷰의 가치는 코멘트 개수가 아니라 신호 대 잡음비다.
 
-## 3단계: 게시 전 자기 검증
-코멘트 초안을 다 작성한 뒤, 게시하기 전에 **각 코멘트를 한 번 더 검증**해라:
-- 각 코멘트가 가리키는 라인·파일을 실제 코드로 다시 열어 확인해라.
-- "이 지적이 진짜 맞는가? 내가 맥락을 놓치지 않았나?" 자문해라.
-- 확신할 수 없는 코멘트도 버리지 마라. 코멘트 본문에 **검증 상태: 불확실**과 **확신하지 못한 이유**를 포함하고, 무엇을 추가 확인하면 확정되는지 설명해라.
-- 불확실한 Blocker는 자동 REQUEST_CHANGES로 사용하지 말고 COMMENT로 게시한다. 코드와 설정으로 확인된 Blocker만 REQUEST_CHANGES로 게시한다.
+## 3단계: 검증 자료 작성
+각 후보가 실제 코드와 diff에 근거하는지 다시 확인하고, 불확실하면 이유와 필요한 확인 사항을 명시해라. 확신할 수 없는 코멘트도 버리지 마라. 리뷰 자료에는 검증 상태와 확신하지 못한 이유, 무엇을 더 확인해야 확정되는지 적는다. 자동 리뷰 자료는 사람의 판단을 돕는 것이며 결과가 비어 있어도 승인을 뜻하지 않는다.
 
 ## GitHub 댓글 작성자 표시 — 필수
-
-GitHub에 게시하는 모든 body(전체 리뷰 body, 인라인 comments[].body, 기존 스레드 답글 body)는 반드시 아래 footer로 끝내라. 사람이 작성한 댓글로 오해되지 않게 이 표시를 생략하지 마라.
-
+GitHub에 게시하는 모든 body(전체 리뷰 body, 인라인 comments[].body, 기존 스레드 답글 body)는 아래 footer로 끝난다.
 ${BOT_AUTHOR_DISCLOSURE}
+최종 publisher가 footer를 추가하므로 JSON 초안에는 작성자 표시를 직접 넣지 마라.
 
-- 전체 리뷰 body뿐 아니라 각 인라인 코멘트에도 footer를 붙인다.
-- 기존 스레드에 답글을 달 때도 동일한 footer를 붙인다.
+## 리뷰 자료 작성 — 사람의 판단을 돕는다
+GitHub에 댓글·리뷰·답글을 직접 게시하지 마라. gh api 쓰기, gh pr review, curl POST 등 원격 상태를 바꾸는 명령은 실행하지 않는다. 기존 리뷰와 thread는 읽기 전용으로 확인하고, 관련된 답글 후보는 자료로만 반환한다.
 
-## 리뷰 게시 방법 — **직접 게시해라**
-
-리뷰 결과를 구조화된 문자열로 반환하지 마라. GitHub에 **직접 게시**한다.
-
-### 0) 기존 리뷰·코멘트 먼저 확인 — 중복 방지 + 답글 참여
-게시하기 전에 이 PR에 이미 달린 리뷰·코멘트를 전부 읽어라 (봇·사람 모두):
-\`\`\`bash
-gh api repos/${owner}/${repo}/pulls/${prNumber}/reviews --paginate
-gh api repos/${owner}/${repo}/pulls/${prNumber}/comments --paginate
-\`\`\`
-- 누가 달았든 **이미 제기된 이슈를 같은 내용으로 다시 달지 마라.**
-- 네가 지적하려는 내용이 기존 코멘트 스레드와 관련 있으면, 새 코멘트 대신 그 스레드에 **답글**을 달아라. 답글 body도 작성자 표시 footer로 끝내라:
-  \`\`\`bash
-  gh api repos/${owner}/${repo}/pulls/${prNumber}/comments -f body="답글 내용\n\n${botAuthorDisclosureJson}" -F in_reply_to=<comment_id>
-  \`\`\`
-- 답글은 **정보를 더할 때만** 달아라 — 첨언, 심각도 정정, 새 커밋에서 해결됐는지 확인 등. 단순 동의("+1")는 달지 마라.
-- 기존 스레드에 답글로 처리한 이슈는 아래 2)의 새 인라인 리뷰에서는 제외한다.
-
-### 1) Head SHA 확보
-\`\`\`bash
-gh pr view ${prNumber} --repo ${owner}/${repo} --json headRefOid --jq .headRefOid
-\`\`\`
-
-### 2) 새 이슈는 인라인 리뷰로 한 번에 submit
-위 0)에서 답글로 처리하지 않은 **새 이슈**의 인라인 코멘트와 전체 리뷰 이벤트를 **하나의 API 호출**로 한꺼번에 보낸다.
-
-\`\`\`bash
-cat > /tmp/review-${prNumber}.json <<'EOF'
-{
-  "commit_id": "<HEAD_SHA>",
-  "event": "REQUEST_CHANGES",
-  "body": "전체 리뷰 요약 (한두 문단, 한국어). 주요 이슈 카테고리와 총평.\\n\\n${botAuthorDisclosureJson}",
-  "comments": [
-    {
-      "path": "src/foo/bar.ts",
-      "line": 42,
-      "side": "RIGHT",
-      "body": "🔴 **Blocker** — [문제 설명]\\n\\n**왜 문제인가:** ...\\n\\n**수정 제안:**\\n\\\`\\\`\\\`ts\\n// 예시 코드\\n\\\`\\\`\\\`\\n\\n${botAuthorDisclosureJson}"
-    },
-    {
-      "path": "src/foo/baz.ts",
-      "line": 100,
-      "side": "RIGHT",
-      "body": "🟡 **Important** — [설명]\\n\\n${botAuthorDisclosureJson}"
-    }
-  ]
-}
-EOF
-
-gh api -X POST repos/${owner}/${repo}/pulls/${prNumber}/reviews --input /tmp/review-${prNumber}.json
-\`\`\`
-
-### 이벤트 선택 기준
-- \`APPROVE\` — Blocker/Important 0개, Minor만 있거나 문제 없음
-- \`REQUEST_CHANGES\` — Blocker 1개 이상
-- \`COMMENT\` — Blocker 0, Important 1개 이상
-
-### 인라인 코멘트 본문 형식
-각 코멘트는 다음 필드를 포함해서 **이해하기 쉽게** 작성:
-- 심각도 이모지 (🔴 Blocker / 🟡 Important / 🟢 Minor)
-- 무엇이 문제인지 (한 줄)
-- 왜 문제인지 (맥락·영향)
-- 어떻게 고치는지 (가능하면 코드 예시)
-
-### 라인이 PR diff에 포함된 라인인지 확인
-인라인 코멘트는 **해당 PR에서 변경된 라인에만** 달 수 있다. \`gh pr diff\`로 변경 라인을 확인한 뒤 그 라인 번호에만 코멘트를 달아라. 변경되지 않은 라인에 달면 GitHub API가 422로 거부한다.
+심각도와 기존 thread 상태를 포함한 JSON 자료만 반환해라. GitHub review event/vote를 선택하거나 verdict를 출력하지 마라. 사람이 최종 판단한다.
 
 ## 출력 규칙
-
-1. 리뷰는 위의 gh api 호출로 **네가 직접 게시**한다. 이슈가 하나도 없거나 전부 기존 스레드 답글로 처리했더라도, **2)의 리뷰 submit은 반드시 한 번 수행**한다 (\`comments\`는 빈 배열이라도 무방). 그래야 리뷰가 PR에 기록으로 남는다.
-2. 모든 게시가 끝난 뒤 마지막에 **정확히 한 줄**로 다음 형식의 verdict를 출력:
-   \`VERDICT: APPROVED\` | \`VERDICT: NEEDS_WORK\` | \`VERDICT: BLOCKED\`
-3. verdict 외의 전체 리뷰 본문을 stdout으로 반환하지 마. 중간 진행 로그는 짧게만.`;
+설명·Markdown·코드펜스 없이 아래 형태의 JSON만 반환한다. comments와 replies는 후보 자료일 뿐이며 게시하지 않는다.
+{
+  "summary": "리뷰 근거와 결과 요약. 이슈가 없어도 자동 승인으로 표현하지 않는다.",
+  "comments": [{
+    "path": "src/example.ts",
+    "line": 42,
+    "side": "RIGHT",
+    "severity": "blocker|important|minor",
+    "body": "문제·영향·수정 제안을 포함한 한국어 리뷰 자료"
+  }],
+  "replies": [{
+    "commentId": 123,
+    "severity": "blocker|important|minor",
+    "body": "기존 thread에 추가할 근거 있는 답글 자료"
+  }],
+  "existingFindings": [{
+    "commentId": 123,
+    "status": "still_applies|fixed_in_code|not_actionable|uncertain",
+    "severity": "blocker|important|minor|null",
+    "body": "현재 HEAD에서 확인한 근거 또는 확인하지 못한 이유"
+  }]
+}
+- inline 자료는 PR diff의 변경 라인을 가리켜야 한다.
+- 기존 리뷰와 중복되는 내용을 반복하지 말고, 사람에게 필요한 심각도 breakdown은 summary에 남겨라.
+- comments/replies가 없으면 빈 배열을 반환한다. 억지로 후보를 만들지 마라.`;
 }

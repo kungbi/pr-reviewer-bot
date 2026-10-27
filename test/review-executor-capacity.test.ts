@@ -1,5 +1,9 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 jest.mock('../src/github', () => ({
   getPRDetails: jest.fn(),
+  getPRDiff: jest.fn(),
   getPRHeadSha: jest.fn(),
   listReviewThreads: jest.fn(),
   postInlineReview: jest.fn(),
@@ -23,7 +27,7 @@ jest.mock('../src/discord-notifier', () => ({
 }));
 
 import { executeReview } from '../src/review/review-executor';
-import { getPRDetails, getPRHeadSha, listReviewThreads, verifyReviewPosted } from '../src/github';
+import { getPRDetails, getPRDiff, getPRHeadSha, listReviewThreads, verifyReviewPosted } from '../src/github';
 import { runReviewVerificationGate } from '../src/review/review-verification-gate';
 import { getReviewMemoryContext } from '../src/review-memory/review-memory-service';
 import { sendReviewFailedNotification } from '../src/discord-notifier';
@@ -31,6 +35,7 @@ import ReviewedPRsState from '../src/utils/state-manager';
 import { ModelCapacityError } from '../src/utils/sessions_spawn';
 
 const mockGetPRDetails = getPRDetails as jest.Mock;
+const mockGetPRDiff = getPRDiff as jest.Mock;
 const mockGetPRHeadSha = getPRHeadSha as jest.Mock;
 const mockListReviewThreads = listReviewThreads as jest.Mock;
 const mockVerifyReviewPosted = verifyReviewPosted as jest.Mock;
@@ -39,10 +44,20 @@ const mockRunReviewVerificationGate = runReviewVerificationGate as jest.Mock;
 const mockSendReviewFailedNotification = sendReviewFailedNotification as jest.Mock;
 
 describe('executeReview capacity propagation', () => {
+  let originalCwd: string;
+  let testRoot: string;
+  afterEach(() => {
+    process.chdir(originalCwd);
+    fs.rmSync(testRoot, { recursive: true, force: true });
+  });
   beforeEach(() => {
+    originalCwd = process.cwd();
+    testRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'review-outbox-test-'));
+    process.chdir(testRoot);
     jest.clearAllMocks();
     mockRunReviewVerificationGate.mockReset();
     mockGetPRHeadSha.mockResolvedValue('head-sha');
+    mockGetPRDiff.mockResolvedValue('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new');
     mockListReviewThreads.mockResolvedValue([]);
     mockVerifyReviewPosted.mockResolvedValue(true);
     mockGetReviewMemoryContext.mockReturnValue({ lessons: [] });
@@ -52,6 +67,8 @@ describe('executeReview capacity propagation', () => {
       author: { login: 'author' },
       headRefName: 'feature',
       baseRefName: 'main',
+      headSha: 'a'.repeat(40),
+      baseSha: 'b'.repeat(40),
     });
   });
 
@@ -117,11 +134,13 @@ describe('executeReview capacity propagation', () => {
 
     await expect(executeReview('org', 'repo', 123, state)).resolves.toMatchObject({
       success: true,
-      verdict: 'approved',
+      verdict: 'awaiting_human_review',
       commentPosted: true,
     });
 
     expect(mockRunReviewVerificationGate).toHaveBeenCalledWith(expect.objectContaining({ reviewThreads }));
-    expect((state as unknown as { markPRReviewed: jest.Mock }).markPRReviewed).toHaveBeenCalled();
+    expect((state as unknown as { markPRReviewed: jest.Mock }).markPRReviewed).toHaveBeenCalledWith(
+      'org', 'repo', 123, 'awaiting_human_review', 'a'.repeat(40),
+    );
   });
 });

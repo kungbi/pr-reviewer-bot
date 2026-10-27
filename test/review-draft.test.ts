@@ -548,12 +548,21 @@ describe('review draft verification gate', () => {
     expect(prompt).toContain('GitHub에 어떠한 변경도 게시하지 마라');
   });
 
-  it('parses only a valid verified draft and derives a blocking verdict from retained findings', () => {
+  it('keeps the active draft prompt focused on human-decision material without vote instructions', () => {
+    const prompt = buildReviewDraftPrompt({ owner: 'org', repo: 'repo', prNumber: 123 });
+
+    expect(prompt).toContain('사람이 최종 판단');
+    expect(prompt).not.toContain('승인 이벤트');
+    expect(prompt).not.toContain('APPROVE');
+    expect(prompt).not.toContain('REQUEST_CHANGES');
+  });
+
+  it('parses a verified draft and leaves the final decision to a human', () => {
     const verified = parseReviewDraft(`\n\`\`\`json\n${JSON.stringify(candidate)}\n\`\`\`\n`);
     const posting = prepareReviewForPosting(verified);
 
-    expect(getReviewVerdict(verified)).toBe('blocked');
-    expect(posting.event).toBe('REQUEST_CHANGES');
+    expect(getReviewVerdict(verified)).toBe('awaiting_human_review');
+    expect(posting.event).toBe('COMMENT');
     expect(posting.body).toContain(BOT_AUTHOR_DISCLOSURE);
     expect(posting.comments[0].body).toContain(BOT_AUTHOR_DISCLOSURE);
     expect(posting.replies[0].body).toContain(BOT_AUTHOR_DISCLOSURE);
@@ -578,7 +587,7 @@ describe('review draft verification gate', () => {
 
     expect(posting.body).toContain('⚠️ **검증 불확실 1건**');
     expect(posting.event).toBe('COMMENT');
-    expect(getReviewVerdict(verified)).toBe('needs_work');
+    expect(getReviewVerdict(verified)).toBe('awaiting_human_review');
     expect(posting.comments[0].body).toContain('**검증 상태**: 불확실');
     expect(posting.comments[0].body).toContain(
       '**확신하지 못한 이유**: 운영 DTO 설정을 저장소에서 확인할 수 없어 실제 입력 도달 여부는 확정하지 못했습니다.',
@@ -631,7 +640,7 @@ describe('review draft verification gate', () => {
 
     const posting = prepareReviewForPosting(verified);
 
-    expect(getReviewVerdict(verified)).toBe('needs_work');
+    expect(getReviewVerdict(verified)).toBe('awaiting_human_review');
     expect(posting.event).toBe('COMMENT');
     expect(posting.body).toContain('🟡 **Important 1건**');
     expect(posting.replies[0].body).toContain(BOT_AUTHOR_DISCLOSURE);
@@ -652,7 +661,7 @@ describe('review draft verification gate', () => {
 
     const posting = prepareReviewForPosting(draft);
 
-    expect(posting.event).toBe('APPROVE');
+    expect(posting.event).toBe('COMMENT');
     expect(posting.body).toContain('🟢 **Minor 1건**');
     expect(posting.body).toContain('기존 미해결 지적');
     expect(posting.body).not.toContain('✅ **이슈 없음**');

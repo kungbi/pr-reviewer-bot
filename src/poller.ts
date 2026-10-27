@@ -1,3 +1,4 @@
+import { listReportOutbox, readReportOutbox } from './review/review-report-outbox';
 import cron from 'node-cron';
 import axios from 'axios';
 import { executeReviewWithRetry } from './review/polling-reviewer';
@@ -57,14 +58,27 @@ function getRepoInfo(pr: GitHubPRItem): { owner: string; name: string } {
   };
 }
 
+let assignedPollInFlight = false;
+
 async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<void> {
   if (shouldStop()) {
     logger.info('[POLLER] Draining; skipping assigned-PR poll');
     return;
   }
+  if (assignedPollInFlight) return;
+  assignedPollInFlight = true;
   logger.info('[POLLER] Checking for assigned PRs...');
 
   try {
+    const state = getSharedState();
+    const recovering = new Set<string>();
+    for (const entry of listReportOutbox()) {
+      if (shouldStop()) return;
+      const key = `${entry.owner.toLowerCase()}/${entry.repo.toLowerCase()}#${entry.prNumber}`;
+      recovering.add(`${key}:${entry.headSha.toLowerCase()}`);
+      try { await executeReview(entry.owner, entry.repo, entry.prNumber, state, entry.headSha); }
+      catch (err) { logger.warn(`[POLLER] Outbox recovery failed for ${key}: ${(err as Error).message}`); }
+    }
     const itemsRaw = await searchPRsForReviewer(100);
     const items: GitHubPRItem[] = Array.isArray(itemsRaw) ? itemsRaw : [];
 
@@ -75,9 +89,7 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
       return;
     }
 
-    const state = getSharedState();
-
-    const newPRs: Array<{ pr: GitHubPRItem; owner: string; repo: string }> = [];
+    const newPRs: Array<{ pr: GitHubPRItem; owner: string; repo: string; headSha: string | null }> = [];
     for (const pr of items) {
       if (shouldStop()) {
         logger.info('[POLLER] Draining; stopped PR discovery before state was locked');
@@ -85,11 +97,6 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
       }
       const { owner, name: repo } = getRepoInfo(pr);
       const prLabel = `${owner}/${repo}#${pr.number}`;
-
-      if (state.isPRReviewing(owner, repo, pr.number)) {
-        logger.info(`[POLLER] Skipping in-progress: ${prLabel} - "${pr.title}"`);
-        continue;
-      }
 
       // Fetch the current HEAD SHA so we can tell "already reviewed at this
       // exact SHA" apart from "reviewed earlier, but new commits since".
@@ -100,7 +107,23 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
         logger.warn(`[POLLER] Could not fetch HEAD SHA for ${prLabel}: ${(err as Error).message}`);
       }
 
-      if (headSha && state.isPRReviewed(owner, repo, pr.number, headSha)) {
+      // A recovery attempt suppresses only the same revision, never a newer HEAD.
+      // If HEAD is unavailable, fail closed rather than risk replaying a recovery.
+      if ((!headSha && [...recovering].some(key => key.startsWith(`${prLabel.toLowerCase()}:`)))
+        || (headSha && recovering.has(`${prLabel.toLowerCase()}:${headSha.toLowerCase()}`))) continue;
+
+      let pendingReport;
+      try { pendingReport = headSha ? readReportOutbox(owner, repo, pr.number, headSha) : null; }
+      catch (err) {
+        logger.error(`[POLLER] Unsafe outbox for ${prLabel}; skipping review: ${(err as Error).message}`);
+        continue;
+      }
+      if (!pendingReport && state.isPRReviewing(owner, repo, pr.number)) {
+        logger.info(`[POLLER] Skipping in-progress: ${prLabel} - "${pr.title}"`);
+        continue;
+      }
+
+      if (headSha && state.isPRReviewed(owner, repo, pr.number, headSha) && !pendingReport) {
         logger.info(`[POLLER] Skipping — already reviewed at current SHA: ${prLabel}`);
         continue;
       }
@@ -117,7 +140,7 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
         logger.info(`[POLLER] New PR detected: ${prLabel} - "${pr.title}"`);
       }
 
-      newPRs.push({ pr, owner, repo });
+      newPRs.push({ pr, owner, repo, headSha });
     }
 
     if (newPRs.length === 0) return;
@@ -133,9 +156,15 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
         logger.info(`[POLLER] Draining; leaving ${newPRs.length - i} queued PR(s) for the next process`);
         break;
       }
-      const batch = newPRs.slice(i, i + concurrency);
-      for (const { owner, repo, pr } of batch) {
-        state.markPRReviewing(owner, repo, pr.number);
+      const batch: typeof newPRs = [];
+      for (const candidate of newPRs.slice(i, i + concurrency)) {
+        const { owner, repo, pr, headSha } = candidate;
+        try {
+          if (!headSha || !readReportOutbox(owner, repo, pr.number, headSha)) state.markPRReviewing(owner, repo, pr.number, headSha);
+          batch.push(candidate);
+        } catch (err) {
+          logger.error(`[POLLER] Cannot safely start ${owner}/${repo}#${pr.number}: ${(err as Error).message}`);
+        }
       }
       const batchResults = await Promise.all(
         batch.map(({ pr, owner, repo }) =>
@@ -158,6 +187,8 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
     if (error.response) {
       logger.error(`[POLLER] API response: ${error.response.status} ${JSON.stringify(error.response.data)}`);
     }
+  } finally {
+    assignedPollInFlight = false;
   }
 }
 
