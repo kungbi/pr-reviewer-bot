@@ -231,6 +231,9 @@ export async function runReviewVerificationGate(args: RunReviewVerificationGateA
     `[ReviewVerificationGate] candidate counts: stage=verified, inline=${verified.comments.length}, replies=${verified.replies.length}`,
   );
 
+  if (!verified.publicSummary) {
+    throw new Error('invalid verified draft: publicSummary is required for new reviews');
+  }
   await args.publish(verified);
   return verified;
 }

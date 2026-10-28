@@ -211,6 +211,11 @@ async function buildOutboxReport(entry: ReportOutboxEntry, clonePath?: string): 
     }
   }
 
+  // Bind public test wording to the same authoritative result persisted in the
+  // private report. Do not alter legacy outbox bodies/operation identities.
+  if (entry.draft.publicSummary) {
+    entry.draft.testExecutionStatus = testResult.status;
+  }
   const report = buildReviewReport({
     owner,
     repository: repo,

@@ -10,9 +10,12 @@ const runModelCapacityRetry = (verificationGateModule as typeof verificationGate
   ) => Promise<T>;
 }).runModelCapacityRetry;
 
+const publicSummary = { conclusion: '사람의 검토가 필요합니다.', evidence: ['현재 변경의 오류 전파 경로를 확인했습니다.'], verificationLimits: [] };
+
 function verifiedJson(draft: { summary: string; comments: object[]; replies: object[] }): string {
   return JSON.stringify({
     ...draft,
+    publicSummary,
     comments: draft.comments.map((comment) => ({
       ...comment,
       verification: { confidence: 'confirmed' },
@@ -120,6 +123,7 @@ describe('runReviewVerificationGate', () => {
       }],
     });
     const verifier = JSON.stringify({
+      publicSummary,
       summary: '기존 지적 상태를 독립 검증했습니다.',
       comments: [],
       replies: [{
@@ -184,6 +188,7 @@ describe('runReviewVerificationGate', () => {
       replies: [],
     });
     const verifiedRecall = JSON.stringify({
+      publicSummary,
       summary: '누락 탐지 후보를 검증했습니다.',
       comments: [{
         path: 'src/worker.ts', line: 70, side: 'RIGHT', severity: 'important', kind: 'finding',

@@ -249,6 +249,39 @@ describe('executeReview local HTML report integration', () => {
     fs.rmSync(testRoot, { recursive: true, force: true });
   });
 
+  it.each([
+    ['passed', '격리 테스트 통과'],
+    ['failed', '격리 테스트 실패'],
+    ['blocked', '격리 테스트 미완료'],
+  ] as const)('publishes %s from the authoritative runner and keeps audit evidence private', async (status, label) => {
+    const audit = '원본 comments/replies 후보 0건; GitHub GET; 활성 thread 없음; node_modules 없음; 파일/GitHub 변경 없음';
+    const draft: ReviewDraft = { ...verifiedDraft(), summary: audit, publicSummary: {
+      conclusion: '입력 검증 계약에 새 결함은 확인되지 않았습니다.',
+      evidence: ['빈 ID는 validateId에서 거부됩니다.'],
+      verificationLimits: ['연관 저장소는 다른 브랜치여서 배포 시 호환성은 미확인입니다.'],
+    }, testExecutionStatus: 'passed' };
+    mockRunReviewVerificationGate.mockImplementation(async (args) => { await args.publish(draft); return draft; });
+    mockRunReviewTestRunner.mockResolvedValue({ status, reason: `runner ${status}`, install: { status: 'passed' }, test: { status, output: 'private diagnostic' } });
+    const state = new ReviewedPRsState(path.join(testRoot, 'public-summary-state.json'));
+    jest.spyOn(reportStore, 'storeReviewReportHtml').mockImplementationOnce(() => { throw new Error('storage interrupted'); });
+    await executeReview('acme', 'payments', 123, state);
+    const pending = readReportOutbox('acme', 'payments', 123, pinnedHeadSha);
+    expect(pending?.draft).toMatchObject({ publicSummary: draft.publicSummary, testExecutionStatus: status });
+    await executeReview('acme', 'payments', 123, state, pinnedHeadSha);
+    const body = mockPostInlineReview.mock.calls[0][4];
+    expect(body).toContain(label);
+    expect(body).toContain('연관 저장소는 다른 브랜치');
+    expect(body).not.toContain(audit);
+    expect(body).not.toContain('node_modules');
+    if (status !== 'passed') expect(body).not.toContain('격리 테스트 통과');
+    expect(mockRunReviewTestRunner).toHaveBeenCalledTimes(1);
+    expect(mockPostInlineReview).toHaveBeenCalledTimes(1);
+    const html = fs.readFileSync(path.join(reportDirectory(), `acme__payments__123__${pinnedHeadSha}.html`), 'utf8');
+    expect(html).toContain(audit);
+    expect(html).toContain('private diagnostic');
+    expect(html).toContain(pinnedHeadSha);
+  });
+
   it.each(['failed', 'blocked', 'passed'] as const)('preserves exact %s test evidence across published report recovery', async (status) => {
     const statePath = path.join(testRoot, 'review-state.json');
     const state = new ReviewedPRsState(statePath);
