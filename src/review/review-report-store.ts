@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { runtimeStatePath } from '../utils/runtime-paths';
 
 const MAX_REPORT_BYTES = 2_000_000;
 const SAFE_SEGMENT = /^[A-Za-z0-9_.-]+$/;
@@ -85,7 +86,7 @@ export function storeReviewReportHtml(options: StoreReviewReportHtmlOptions): st
   }
 
   const root = createPrivateReportRoot(
-    options.reportRoot ?? path.resolve(process.cwd(), 'state', 'review-reports'),
+    options.reportRoot ?? runtimeStatePath('review-reports'),
   );
   const filename = `${options.owner.toLowerCase()}__${options.repository.toLowerCase()}__${options.pullRequestNumber}__${options.headSha.toLowerCase()}.html`;
   const destination = path.join(root, filename);

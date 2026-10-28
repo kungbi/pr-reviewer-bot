@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import logger from './logger';
+import { runtimeStatePath } from './runtime-paths';
 import {
   NewReviewPublication,
   PRStatus,
@@ -13,9 +14,7 @@ import {
 } from '../types';
 
 const MAX_RETRIES = 3;
-// Resolved from this module's location (dist/src/utils → project root), not
-// process.cwd(), so the path is stable regardless of where the bot is launched.
-export const STATE_FILE = path.join(__dirname, '../../../state/reviewed-prs.json');
+export const STATE_FILE = runtimeStatePath('reviewed-prs.json');
 
 // A 'reviewing' lock older than this is treated as stale — the bot likely
 // crashed mid-review, so the PR should be re-picked instead of stuck forever.
@@ -28,7 +27,7 @@ class ReviewedPRsState {
   data: StateFile;
   private reviewPublicationLockHeld = false;
 
-  constructor(stateFilePath = 'reviewed-prs.json') {
+  constructor(stateFilePath = runtimeStatePath('reviewed-prs.json')) {
     this.stateFilePath = stateFilePath;
     this.data = {
       reviewedPRs: {},
@@ -45,11 +44,11 @@ class ReviewedPRsState {
         throw new Error('State file has unexpected format: reviewedPRs must be an object');
       }
       if (candidate.repliedComments !== undefined &&
-          (typeof candidate.repliedComments !== 'object' || Array.isArray(candidate.repliedComments))) {
+          (!candidate.repliedComments || typeof candidate.repliedComments !== 'object' || Array.isArray(candidate.repliedComments))) {
         throw new Error('State file has unexpected format: repliedComments must be an object');
       }
       if (candidate.reviewPublications !== undefined &&
-          (typeof candidate.reviewPublications !== 'object' || Array.isArray(candidate.reviewPublications))) {
+          (!candidate.reviewPublications || typeof candidate.reviewPublications !== 'object' || Array.isArray(candidate.reviewPublications))) {
         throw new Error('State file has unexpected format: reviewPublications must be an object');
       }
       return {
@@ -133,19 +132,35 @@ class ReviewedPRsState {
 
   load(): void {
     try {
-      if (fs.existsSync(this.stateFilePath)) {
-        const content = fs.readFileSync(this.stateFilePath, 'utf8');
-        const parsed = JSON.parse(content) as unknown;
-        const loaded = this.parseStateData(parsed);
+      const loaded = this.withReviewPublicationLock(() => {
+        let content: string;
+        try {
+          content = fs.readFileSync(this.stateFilePath, 'utf8');
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          const outbox = path.join(path.dirname(this.stateFilePath), 'review-report-outbox');
+          if (path.resolve(this.stateFilePath) === runtimeStatePath('reviewed-prs.json')
+              && fs.existsSync(outbox) && fs.readdirSync(outbox).length > 0) {
+            throw new Error(`Durable state file is missing alongside an existing report outbox: ${this.stateFilePath}`);
+          }
+          // Only explicit startup load may initialize a first-run store, under
+          // the same exclusive lock and durable write protocol as publication.
+          this.data = { reviewedPRs: {}, repliedComments: {} };
+          this.writeStateFile();
+          return true;
+        }
+        const loaded = this.parseStateData(JSON.parse(content) as unknown);
         this.data = loaded.data;
         if (loaded.migrated) {
           logger.warn('[StateManager] Migrating legacy flat-array state to object format');
           this.save();
         }
-      }
+        return true;
+      }, false);
+      if (!loaded) throw new Error(`Could not acquire state lock for ${this.stateFilePath}`);
     } catch (error) {
       logger.error(`[StateManager] Failed to load state: ${(error as Error).message}`);
-      this.data = { reviewedPRs: {}, repliedComments: {} };
+      throw error;
     }
   }
 
@@ -741,8 +756,9 @@ let sharedInstance: ReviewedPRsState | null = null;
  */
 export function getSharedState(): ReviewedPRsState {
   if (!sharedInstance) {
-    sharedInstance = new ReviewedPRsState(STATE_FILE);
-    sharedInstance.load();
+    const instance = new ReviewedPRsState();
+    instance.load();
+    sharedInstance = instance;
   }
   return sharedInstance;
 }

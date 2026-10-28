@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger';
+import { runtimeStatePath } from '../utils/runtime-paths';
 import {
   ReviewComment,
   ReviewLesson,
@@ -9,7 +10,7 @@ import {
   ReviewThreadArchiveEntry,
 } from '../types';
 
-export const REVIEW_MEMORY_FILE = path.join(__dirname, '../../../state/review-memory.json');
+export const REVIEW_MEMORY_FILE = runtimeStatePath('review-memory.json');
 
 const DEFAULT_MAX_TEXT_CHARS = 4000;
 
@@ -71,7 +72,7 @@ export class ReviewMemoryStore {
   data: ReviewMemoryFile;
   private maxTextChars: number;
 
-  constructor(filePath = REVIEW_MEMORY_FILE, options: ReviewMemoryStoreOptions = {}) {
+  constructor(filePath = runtimeStatePath('review-memory.json'), options: ReviewMemoryStoreOptions = {}) {
     this.filePath = filePath;
     this.maxTextChars = options.maxTextChars ?? DEFAULT_MAX_TEXT_CHARS;
     this.data = emptyMemoryFile();
@@ -239,7 +240,7 @@ let sharedStore: ReviewMemoryStore | null = null;
 export function getSharedReviewMemoryStore(): ReviewMemoryStore {
   if (!sharedStore) {
     const rawMaxChars = Number.parseInt(process.env.REVIEW_MEMORY_RAW_MAX_CHARS ?? '4000', 10);
-    sharedStore = new ReviewMemoryStore(REVIEW_MEMORY_FILE, {
+    sharedStore = new ReviewMemoryStore(runtimeStatePath('review-memory.json'), {
       maxTextChars: Number.isFinite(rawMaxChars) && rawMaxChars >= 100 ? rawMaxChars : 4000,
     });
     sharedStore.load();

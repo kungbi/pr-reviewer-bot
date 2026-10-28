@@ -26,6 +26,7 @@ import { getSharedRepositoryCache, RepositoryCache } from './repository-cache';
 import { getReviewMemoryContext } from '../review-memory/review-memory-service';
 import { getReviewSeveritySummary, getReviewVerdict, prepareReviewForPosting, ReviewDraft } from './review-draft';
 import { publishVerifiedDraft } from './review-publisher';
+import { publicationErrorDiagnostic, publicationDiagnosticText } from './publication-error-diagnostic';
 import { runReviewVerificationGate } from './review-verification-gate';
 import { buildReviewReport, extractReviewDiffChange } from './review-report-builder';
 import { validateReviewReportMetadata } from './review-report';
@@ -43,15 +44,45 @@ const inFlightReviews = new Set<string>();
 const reviewShutdown = new GracefulShutdown();
 const FULL_COMMIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
-function publicationFailure(entry: ReportOutboxEntry, state: ReviewedPRsState): Error {
+function withPublicationDiagnostic(error: Error, original: unknown, inspectionError?: unknown): Error {
+  const cause = publicationErrorDiagnostic(original);
+  error.message += `; original failure: ${publicationDiagnosticText(cause)}`;
+  Object.defineProperty(error, 'cause', { value: cause, configurable: true });
+  if (inspectionError !== undefined) {
+    const diagnostic = publicationErrorDiagnostic(inspectionError);
+    error.message += `; durable state inspection failed: ${publicationDiagnosticText(diagnostic)}`;
+    Object.defineProperty(error, 'stateInspectionError', { value: diagnostic });
+  }
+  return error;
+}
+
+function publicationFailure(entry: ReportOutboxEntry, state: ReviewedPRsState, original: unknown): Error {
   try {
     const durable = readReportOutbox(entry.owner, entry.repo, entry.prNumber, entry.headSha);
     const publication = state.getDurableReviewPublication(`${entry.owner}/${entry.repo}#${entry.prNumber}:${entry.headSha}`);
-    if (durable?.publicationIntent === 'unattempted' && !publication) {
-      return new ReportRecoveryError('Publication failed before a confirmed write; safe recovery will retry');
+    if (durable?.publicationIntent === 'unattempted') {
+      const posting = prepareReviewForPosting(durable.draft);
+      const digest = createHash('sha256').update(JSON.stringify({ owner: entry.owner, repo: entry.repo, prNumber: entry.prNumber, headSha: entry.headSha, body: posting.body, comments: posting.comments })).digest('hex').slice(0, 24);
+      const marker = `<!-- pr-reviewer-bot:review:${digest} -->`;
+      // Match recovery's exact reservation contract. Never use in-memory state,
+      // an error's wording/status, or a failed inspection as proof of no POST.
+      const unattempted = !publication || (posting.replies.length === 0
+        && publication.status === 'pending' && publication.postAttempted === false
+        && publication.owner === entry.owner && publication.repo === entry.repo
+        && publication.prNumber === entry.prNumber && publication.headSha === entry.headSha
+        && publication.operationMarker === marker
+        && ['COMMENT', 'APPROVE', 'REQUEST_CHANGES'].includes(publication.pendingEvent ?? '')
+        && publication.pendingBody === `${marker}\n${posting.body}`
+        && JSON.stringify(publication.pendingComments) === JSON.stringify(posting.comments));
+      if (unattempted) return withPublicationDiagnostic(
+        new ReportRecoveryError('Publication failed before a confirmed write; safe recovery will retry'), original,
+      );
     }
-  } catch { /* uncertain durable state must fail closed */ }
-  return new ReportPublicationAmbiguousError();
+  } catch (inspectionError) {
+    // Preserve both faults without relaxing duplicate-publication protection.
+    return withPublicationDiagnostic(new ReportPublicationAmbiguousError(), original, inspectionError);
+  }
+  return withPublicationDiagnostic(new ReportPublicationAmbiguousError(), original);
 }
 
 function normalizedCommitSha(value: unknown): string | null {
@@ -253,8 +284,8 @@ async function executeReviewInternal(
       let publication;
       try {
         publication = state.getDurableReviewPublication(`${owner}/${repo}#${prNumber}:${headSha}`);
-      } catch {
-        throw new ReportPublicationAmbiguousError();
+      } catch (err) {
+        throw withPublicationDiagnostic(new ReportPublicationAmbiguousError(), err);
       }
       const digest = createHash('sha256').update(JSON.stringify({ owner, repo, prNumber, headSha, body: posting.body, comments: posting.comments })).digest('hex').slice(0, 24);
       if ((pendingReport.publicationIntent !== undefined && pendingReport.publicationIntent !== 'unattempted' && pendingReport.publicationIntent !== 'attempted')
@@ -308,8 +339,8 @@ async function executeReviewInternal(
               writeReportOutbox(pendingReport);
             },
             postInlineReview, postReviewCommentReply });
-        } catch {
-          throw publicationFailure(pendingReport, state);
+        } catch (err) {
+          throw publicationFailure(pendingReport, state, err);
         }
       } else if (publication.status !== 'completed') {
         try {
@@ -536,7 +567,7 @@ async function executeReviewInternal(
       }
     } catch (err) {
       subagentError = outboxEntry && (outboxEntry as ReportOutboxEntry).status === 'prepared'
-        ? publicationFailure(outboxEntry as ReportOutboxEntry, state)
+        ? publicationFailure(outboxEntry as ReportOutboxEntry, state, err)
         : err instanceof Error ? err : new Error(String(err));
       logger.error(`[review-executor] Review draft/verification failed: ${subagentError.message}`);
       subagentFailed = true;

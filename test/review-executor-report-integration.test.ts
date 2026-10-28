@@ -492,6 +492,30 @@ describe('executeReview local HTML report integration', () => {
     expect(html).toContain(pinnedHeadSha);
   });
 
+  it('publishes with canonical cwd state and recovers its report without a second POST', async () => {
+    const file = path.join(testRoot, 'state', 'reviewed-prs.json');
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, JSON.stringify({ reviewedPRs: {}, repliedComments: { old: { commentedAt: 'retained' } } }));
+    const state = new ReviewedPRsState(); state.load();
+    expect(state.stateFilePath).toBe(file);
+    const axios = require('axios').default;
+    jest.spyOn(axios, 'get').mockImplementation(async (...args: unknown[]) => ({ data: String(args[0]).endsWith('/user') ? { login: 'bot' } : [], headers: {} }));
+    const post = jest.spyOn(axios, 'post').mockResolvedValue({ data: { id: 999, state: 'COMMENTED' }, headers: {} });
+    mockPostInlineReview.mockImplementationOnce(jest.requireActual('../src/github').postInlineReview);
+    jest.spyOn(reportStore, 'storeReviewReportHtml').mockImplementationOnce(() => { throw new Error('report storage unavailable'); });
+    await expect(executeReview('acme', 'payments', 123, state)).resolves.toMatchObject({ success: true });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(readReportOutbox('acme', 'payments', 123, pinnedHeadSha)?.status).toBe('published');
+    const restarted = new ReviewedPRsState(); restarted.load();
+    expect(restarted.isCommentReplied('old')).toBe(true);
+    expect(restarted.getReviewPublication(`acme/payments#123:${pinnedHeadSha}`)).toMatchObject({ status: 'completed', reviewId: 999 });
+    await executeReview('acme', 'payments', 123, restarted, pinnedHeadSha);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(mockPostInlineReview).toHaveBeenCalledTimes(1);
+    expect(readReportOutbox('acme', 'payments', 123, pinnedHeadSha)).toBeNull();
+    expect(fs.readFileSync(path.join(reportDirectory(), `acme__payments__123__${pinnedHeadSha}.html`), 'utf8')).toContain('Verified human review summary.');
+  });
+
   it('retries a no-reply formal publication after a transient pre-write login failure', async () => {
     const file = path.join(testRoot, 'review-state.json');
     const state = new ReviewedPRsState(file);
@@ -505,6 +529,73 @@ describe('executeReview local HTML report integration', () => {
     expect(readReportOutbox('acme', 'payments', 123, pinnedHeadSha)?.publicationIntent).toBe('unattempted');
     await executeReview('acme', 'payments', 123, restarted);
     expect(mockPostInlineReview).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['initial', 'recovery'])('preserves the sanitized original pre-write error during %s publication', async mode => {
+    const file = path.join(testRoot, 'review-state.json');
+    const state = new ReviewedPRsState(file);
+    state.markPRReviewing('acme', 'payments', 123, pinnedHeadSha);
+    if (mode === 'recovery') writeReportOutbox({ owner: 'acme', repo: 'payments', prNumber: 123, headSha: pinnedHeadSha, details: makeDetails(pinnedHeadSha), draft: verifiedDraft(), diff: DIFF, status: 'prepared', publicationIntent: 'unattempted' });
+    const original = Object.assign(new Error('login lookup failed: Bearer private-credential\nforged log'), {
+      code: 'ECONNRESET', response: { status: 503, data: 'private-response' }, config: { headers: { authorization: 'private-credential' } },
+    });
+    mockPostInlineReview.mockRejectedValueOnce(original);
+    const failure = await executeReview('acme', 'payments', 123, state).catch(error => error);
+    expect(failure).toMatchObject({ name: 'ReportRecoveryError', cause: { message: expect.stringContaining('login lookup failed'), code: 'ECONNRESET', status: 503 } });
+    expect(failure.message).toContain('login lookup failed');
+    expect(failure.message).toContain('ECONNRESET');
+    expect(failure.cause).not.toBe(original);
+    expect(failure.cause.config).toBeUndefined();
+    expect(failure.cause.response).toBeUndefined();
+    expect(JSON.stringify(failure) + failure.message + failure.cause.message).not.toMatch(/private-credential|private-response|\nforged/);
+    expect(readReportOutbox('acme', 'payments', 123, pinnedHeadSha)?.publicationIntent).toBe('unattempted');
+  });
+
+  it.each(['matching', 'marker', 'body', 'comments', 'identity', 'attempted', 'completed'])('classifies a %s durable reservation without speculative replay', async variant => {
+    const state = new ReviewedPRsState(path.join(testRoot, 'review-state.json'));
+    state.markPRReviewing('acme', 'payments', 123, pinnedHeadSha);
+    mockPostInlineReview.mockImplementationOnce(async () => {
+      const posting = prepareReviewForPosting(verifiedDraft());
+      const digest = createHash('sha256').update(JSON.stringify({ owner: 'acme', repo: 'payments', prNumber: 123, headSha: pinnedHeadSha, body: posting.body, comments: posting.comments })).digest('hex').slice(0, 24);
+      const marker = `<!-- pr-reviewer-bot:review:${digest} -->`;
+      const key = `acme/payments#123:${pinnedHeadSha}`;
+      state.reserveReviewPublication(key, {
+        owner: variant === 'identity' ? 'other' : 'acme', repo: 'payments', prNumber: 123,
+        headSha: pinnedHeadSha, botLogin: 'bot',
+        pendingBody: variant === 'body' ? 'different body' : `${marker}\n${posting.body}`,
+        pendingEvent: 'COMMENT', pendingComments: variant === 'comments' ? [{ path: 'other.ts', line: 1, side: 'RIGHT', body: 'different' }] : posting.comments,
+        operationMarker: variant === 'marker' ? '<!-- different -->' : marker,
+      });
+      if (variant === 'attempted') state.markReviewPublicationPostAttempted(key);
+      if (variant === 'completed') state.completeReviewPublication(key, 12345);
+      throw new Error('prerequisite reconciliation read unavailable');
+    });
+    await expect(executeReview('acme', 'payments', 123, state)).rejects.toMatchObject({ name: variant === 'matching' ? 'ReportRecoveryError' : 'ReportPublicationAmbiguousError', cause: { message: 'prerequisite reconciliation read unavailable' } });
+    if (variant === 'matching' || variant === 'completed') {
+      await executeReview('acme', 'payments', 123, state);
+    } else {
+      await expect(executeReview('acme', 'payments', 123, state)).rejects.toThrow('ambiguous');
+    }
+    expect(mockRunReviewVerificationGate).toHaveBeenCalledTimes(1);
+    expect(mockPostInlineReview).toHaveBeenCalledTimes(variant === 'matching' ? 2 : 1);
+  });
+
+  it('preserves the original failure and lock-inspection failure without guessing delivery', async () => {
+    const file = path.join(testRoot, 'review-state.json');
+    const state = new ReviewedPRsState(file);
+    state.markPRReviewing('acme', 'payments', 123, pinnedHeadSha);
+    mockPostInlineReview.mockImplementationOnce(async () => {
+      fs.writeFileSync(`${file}.review-publication.lock`, 'another publisher');
+      expect(state.reserveReviewPublication('unused', {} as any)).toBe(false);
+      throw new Error('Failed to reserve GitHub review publication');
+    });
+    const failure = await executeReview('acme', 'payments', 123, state).catch(error => error);
+    expect(failure).toMatchObject({ name: 'ReportPublicationAmbiguousError', cause: { message: 'Failed to reserve GitHub review publication' }, stateInspectionError: { message: 'Cannot inspect durable review publication state' } });
+    expect(failure.message).toContain('Failed to reserve GitHub review publication');
+    expect(failure.message).toContain('Cannot inspect durable review publication state');
+    await expect(executeReview('acme', 'payments', 123, state)).rejects.toMatchObject({ name: 'ReportPublicationAmbiguousError', cause: { message: 'Cannot inspect durable review publication state' } });
+    expect(mockPostInlineReview).toHaveBeenCalledTimes(1);
+    expect(postReviewCommentReply).not.toHaveBeenCalled();
   });
 
   it('never repeats an ambiguous publication after restart', async () => {

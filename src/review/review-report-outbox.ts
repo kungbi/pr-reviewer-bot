@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { runtimeStatePath } from '../utils/runtime-paths';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { PRDetails } from '../types';
@@ -51,7 +52,7 @@ export function validateReportSnapshot(entry: ReportOutboxEntry): ReviewReport |
 
 function location(owner: string, repo: string, prNumber: number, headSha: string): string {
   const key = createHash('sha256').update(JSON.stringify([owner.toLowerCase(), repo.toLowerCase(), prNumber, headSha.toLowerCase()])).digest('hex');
-  return path.join(process.cwd(), 'state', 'review-report-outbox', `${key}.json`);
+  return runtimeStatePath('review-report-outbox', `${key}.json`);
 }
 
 // Enumeration is capped: never silently skip records when the directory grows too
@@ -60,7 +61,7 @@ function location(owner: string, repo: string, prNumber: number, headSha: string
 const MAX_DISCOVERY_ENTRIES = 10000;
 export function listReportOutbox(limit = 1000, onError: (message: string) => void = message => logger.error(message)): ReportOutboxEntry[] {
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('invalid outbox discovery limit');
-  const root = createPrivateReportRoot(path.join(process.cwd(), 'state', 'review-report-outbox'));
+  const root = createPrivateReportRoot(runtimeStatePath('review-report-outbox'));
   const cursorFile = path.join(root, '.discovery-cursor');
   const dir = fs.opendirSync(root);
   const names: string[] = [];

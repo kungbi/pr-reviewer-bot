@@ -5,6 +5,7 @@
  */
 
 import dotenv from 'dotenv';
+import { runtimeStatePath } from './runtime-paths';
 dotenv.config({
   override: true,
   ...(process.env.NODE_ENV === 'test' ? { path: '/dev/null', quiet: true } : {}),
@@ -187,7 +188,7 @@ const config = {
 
   // Persistent local cache of every repository visible to GH_TOKEN.
   repositoryCacheEnabled: optionalBool('REPOSITORY_CACHE_ENABLED', true),
-  repositoryCacheDirectory: optional('REPOSITORY_CACHE_DIRECTORY', 'state/repository-cache') as string,
+  repositoryCacheDirectory: optional('REPOSITORY_CACHE_DIRECTORY', runtimeStatePath('repository-cache')) as string,
   repositoryCacheGitTimeoutMs: optionalIntAtLeast('REPOSITORY_CACHE_GIT_TIMEOUT_MS', 300000, 1000),
 
   // Operator-owned trust roots; never read from a PR checkout.
