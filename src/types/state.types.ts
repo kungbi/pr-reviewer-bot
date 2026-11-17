@@ -24,6 +24,7 @@ export interface PRStateEntry {
   reviewingAt?: string;
   reviewingHeadSha?: string | null;
   retryCount?: number;
+  retryHeadSha?: string | null;
   failures?: Array<{ timestamp: string; error: string }>;
   lastFailedAt?: string;
   capacityRetryCount?: number;
@@ -32,12 +33,20 @@ export interface PRStateEntry {
 }
 
 export interface StateFile {
+  reviewRetryBudgets?: Record<string, ReviewRetryBudget>;
   reviewedPRs: Record<string, PRStateEntry>;
   repliedComments: Record<string, { commentedAt: string }>;
   closedReviewThreads?: Record<string, ReviewThreadClosure>;
   pendingReviewReplies?: Record<string, ReviewReplyDelivery>;
   reviewPublications?: Record<string, ReviewPublication>;
   replyMonitorStartedAt?: string;
+}
+
+/** Independent of mutable PR status and retention; never automatically erased. */
+export interface ReviewRetryBudget {
+  retryCount: number;
+  blocked: boolean;
+  failureNotification?: 'attempted' | 'completed' | 'delivery_unknown' | 'suppressed_legacy';
 }
 
 export type ReviewPublicationStatus = 'pending' | 'delivery_unknown' | 'completed';

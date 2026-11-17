@@ -31,6 +31,7 @@ test.each(['ambiguous', 'published'])('old %s outbox does not starve the current
   process.chdir(dir);
   try {
     const state = new ReviewedPRsState(path.join(dir, 'state.json'));
+    state.load();
     (getSharedState as jest.Mock).mockReturnValue(state);
     (getPRHeadSha as jest.Mock).mockResolvedValue('b'.repeat(40));
     (axios.get as jest.Mock).mockResolvedValue({ data: { items: [{ number: 1, title: 'PR', html_url: 'https://github.com/acme/repo/pull/1' }] } });
@@ -44,7 +45,7 @@ test.each(['ambiguous', 'published'])('old %s outbox does not starve the current
     await pollAssignedPRs();
     expect(executeReview).toHaveBeenCalledTimes(2);
     expect(executeReview).toHaveBeenNthCalledWith(1, 'acme', 'repo', 1, state, 'a'.repeat(40));
-    expect(executeReview).toHaveBeenNthCalledWith(2, 'acme', 'repo', 1);
+    expect(executeReview).toHaveBeenNthCalledWith(2, 'acme', 'repo', 1, undefined, undefined, 'b'.repeat(40));
   } finally {
     (require('../src/review/review-report-outbox').readReportOutbox as jest.Mock).mockImplementation(() => ({ status: 'published' }));
     process.chdir(old); fs.rmSync(dir, { recursive: true, force: true });
@@ -58,6 +59,7 @@ test('poisoned current revision is skipped while other PRs and outboxes proceed'
   process.chdir(dir);
   try {
     const state = new ReviewedPRsState(path.join(dir, 'state.json'));
+    state.load();
     (getSharedState as jest.Mock).mockReturnValue(state);
     const actual = jest.requireActual('../src/review/review-report-outbox');
     (require('../src/review/review-report-outbox').readReportOutbox as jest.Mock).mockImplementation(actual.readReportOutbox);
@@ -70,7 +72,7 @@ test('poisoned current revision is skipped while other PRs and outboxes proceed'
     (executeReview as jest.Mock).mockResolvedValue({ success: true, verdict: 'already_reviewed', commentPosted: false });
     await pollAssignedPRs();
     expect(executeReview).toHaveBeenCalledWith('acme', 'repo', 3, state, 'a'.repeat(40));
-    expect(executeReview).toHaveBeenCalledWith('acme', 'repo', 2);
+    expect(executeReview).toHaveBeenCalledWith('acme', 'repo', 2, undefined, undefined, 'a'.repeat(40));
     expect((executeReview as jest.Mock).mock.calls.some(call => call[2] === 1)).toBe(false);
   } finally {
     (require('../src/review/review-report-outbox').readReportOutbox as jest.Mock).mockImplementation(() => ({ status: 'published' }));
@@ -85,6 +87,7 @@ test.each(['malformed', 'permissive', 'symlink'])('invalid %s cursor does not st
   process.chdir(dir);
   try {
     const state = new ReviewedPRsState(path.join(dir, 'state.json'));
+    state.load();
     (getSharedState as jest.Mock).mockReturnValue(state);
     const actual = jest.requireActual('../src/review/review-report-outbox');
     (require('../src/review/review-report-outbox').readReportOutbox as jest.Mock).mockImplementation(actual.readReportOutbox);
@@ -99,7 +102,7 @@ test.each(['malformed', 'permissive', 'symlink'])('invalid %s cursor does not st
     (executeReview as jest.Mock).mockResolvedValue({ success: true, verdict: 'already_reviewed', commentPosted: false });
     await pollAssignedPRs();
     expect(executeReview).toHaveBeenCalledWith('acme', 'repo', 1, state, 'a'.repeat(40));
-    expect(executeReview).toHaveBeenCalledWith('acme', 'repo', 2);
+    expect(executeReview).toHaveBeenCalledWith('acme', 'repo', 2, undefined, undefined, 'a'.repeat(40));
     expect((executeReview as jest.Mock).mock.calls.filter(call => call[2] === 1)).toHaveLength(1);
     expect(fs.readFileSync(target, 'utf8')).toBe('untouched');
     jest.isolateModules(() => expect(jest.requireActual<typeof import('../src/review/review-report-outbox')>('../src/review/review-report-outbox').listReportOutbox()).toHaveLength(1));
@@ -158,6 +161,7 @@ test('discovers durable outbox even after review request disappears', async () =
   process.chdir(dir);
   try {
     const state = new ReviewedPRsState(path.join(dir, 'state.json'));
+    state.load();
     (getSharedState as jest.Mock).mockReturnValue(state);
     (axios.get as jest.Mock).mockResolvedValue({ data: { items: [] } });
     (executeReview as jest.Mock).mockResolvedValue({ success: true, verdict: 'already_reviewed', commentPosted: false });

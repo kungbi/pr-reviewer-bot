@@ -33,6 +33,7 @@ export interface RetryOutcome {
 }
 
 export interface PRInfo {
+  headSha?: string | null;
   owner: string;
   repo: string;
   prNumber: number;

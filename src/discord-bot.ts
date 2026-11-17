@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits, Message } from 'discord.js';
 import { executeReview, isReviewDraining } from './review/review-executor';
+import { executeReviewWithRetry } from './review/polling-reviewer';
 import logger from './utils/logger';
 import config from './utils/config';
 
@@ -52,7 +53,15 @@ export function startDiscordBot(): void {
       }
 
       try {
-        const result = await executeReview(owner, repo, prNumber);
+        const outcome = await executeReviewWithRetry(
+          { owner, repo, prNumber, title: label },
+          (p) => executeReview(owner, repo, prNumber, undefined, undefined, p.headSha ?? undefined),
+        );
+        if (outcome.skipped) {
+          await message.reply(`ℹ️ 재시도 제한 또는 진행 중인 리뷰로 요청을 건너뛰었습니다: **${label}**`);
+          continue;
+        }
+        const result = outcome.result ?? { success: false, verdict: 'error', error: outcome.error };
         if (result.verdict === 'already_reviewed') {
           await message.reply(`ℹ️ 이미 리뷰된 PR입니다: **${label}**`);
         } else if (result.success) {

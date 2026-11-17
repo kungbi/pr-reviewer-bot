@@ -15,6 +15,7 @@ describe('executeReviewWithRetry', () => {
   it('does not consume permanent retry budget for a capacity failure', async () => {
     const state = {
       isPRSkipped: jest.fn().mockReturnValue(false),
+      beginPRRetryAttempt: jest.fn().mockReturnValue(true),
       getPRRetryCount: jest.fn().mockReturnValue(0),
       clearPRRetries: jest.fn(),
       markPRRetryFailure: jest.fn(),
@@ -23,12 +24,12 @@ describe('executeReviewWithRetry', () => {
     mockedGetSharedState.mockReturnValue(state);
 
     const outcome = await executeReviewWithRetry(
-      { owner: 'org', repo: 'repo', prNumber: 123, title: 'review me' },
+      { owner: 'org', repo: 'repo', prNumber: 123, title: 'review me', headSha: 'a'.repeat(40) },
       async () => { throw new ModelCapacityError('temporary capacity'); },
     );
 
     expect(state.markPRRetryFailure).not.toHaveBeenCalled();
-    expect(state.markPRCapacityRetry).toHaveBeenCalledWith('org', 'repo', 123, expect.stringContaining('server_overloaded'));
+    expect(state.markPRCapacityRetry).toHaveBeenCalledWith('org', 'repo', 123, expect.stringContaining('server_overloaded'), 'a'.repeat(40));
     expect(outcome).toMatchObject({ success: false, skipped: false, retryCount: 0 });
     expect(outcome.error).toContain('server_overloaded');
   });

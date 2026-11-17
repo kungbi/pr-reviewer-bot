@@ -110,7 +110,9 @@ const getPRDiff = createRetryFunction(async (owner: unknown, repo: unknown, prNu
 /**
  * Post a comment to a PR (issues/comments endpoint)
  */
-const postComment = createRetryFunction(async (owner: unknown, repo: unknown, prNumber: unknown, body: unknown): Promise<unknown> => {
+// The caller durably reserves failure notification intent. Never retry a POST:
+// a lost transport response can mean the comment was committed by GitHub.
+const postComment = async (owner: string, repo: string, prNumber: number, body: string): Promise<unknown> => {
   logger.info(`Posting comment to ${owner}/${repo}#${prNumber}`);
   const res = await axios.post(
     `${GH_API}/repos/${owner}/${repo}/issues/${prNumber}/comments`,
@@ -119,7 +121,7 @@ const postComment = createRetryFunction(async (owner: unknown, repo: unknown, pr
   );
   checkRateLimit(res.headers as Record<string, string>);
   return res.data;
-}, 3, 1000) as (owner: string, repo: string, prNumber: number, body: string) => Promise<unknown>;
+};
 
 /**
  * List all review comments on a PR, including threaded replies.

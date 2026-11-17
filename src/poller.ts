@@ -128,6 +128,11 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
         continue;
       }
 
+      if (!pendingReport && state.isPRRetryBlocked(owner, repo, pr.number, headSha)) {
+        logger.info(`[POLLER] Skipping exhausted or unknown revision: ${prLabel}`);
+        continue;
+      }
+
       if (state.isPRCompleted(owner, repo, pr.number)) {
         if (!headSha) {
           // Can't confirm new commits without a SHA — skip rather than
@@ -156,19 +161,12 @@ async function pollAssignedPRs(shouldStop: ShouldStop = () => false): Promise<vo
         logger.info(`[POLLER] Draining; leaving ${newPRs.length - i} queued PR(s) for the next process`);
         break;
       }
-      const batch: typeof newPRs = [];
-      for (const candidate of newPRs.slice(i, i + concurrency)) {
-        const { owner, repo, pr, headSha } = candidate;
-        try {
-          if (!headSha || !readReportOutbox(owner, repo, pr.number, headSha)) state.markPRReviewing(owner, repo, pr.number, headSha);
-          batch.push(candidate);
-        } catch (err) {
-          logger.error(`[POLLER] Cannot safely start ${owner}/${repo}#${pr.number}: ${(err as Error).message}`);
-        }
-      }
+      // The wrapper atomically checks the budget and acquires the lock.
+      // Never overwrite skipped state before that gate.
+      const batch = newPRs.slice(i, i + concurrency);
       const batchResults = await Promise.all(
-        batch.map(({ pr, owner, repo }) =>
-          triggerReview(pr).then(outcome => ({ owner, repo, pr, outcome }))
+        batch.map(({ pr, owner, repo, headSha }) =>
+          triggerReview(pr, headSha).then(outcome => ({ owner, repo, pr, outcome }))
         )
       );
       results.push(...batchResults);
@@ -331,9 +329,10 @@ async function pollReviewCommentReplies(shouldStop: ShouldStop = () => false): P
   }
 }
 
-async function triggerReview(pr: GitHubPRItem): Promise<RetryOutcome> {
+async function triggerReview(pr: GitHubPRItem, headSha: string | null): Promise<RetryOutcome> {
   const repoInfo = getRepoInfo(pr);
   const prInfo: PRInfo = {
+    headSha,
     owner: repoInfo.owner,
     repo: repoInfo.name,
     prNumber: pr.number,
@@ -342,7 +341,7 @@ async function triggerReview(pr: GitHubPRItem): Promise<RetryOutcome> {
 
   const outcome = await executeReviewWithRetry(
     prInfo,
-    (p) => executeReview(p.owner, p.repo, p.prNumber)
+    (p) => executeReview(p.owner, p.repo, p.prNumber, undefined, undefined, p.headSha ?? undefined)
   );
 
   if (outcome.success) {

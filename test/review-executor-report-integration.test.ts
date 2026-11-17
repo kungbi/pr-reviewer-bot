@@ -142,6 +142,13 @@ describe('executeReview local HTML report integration', () => {
 
   const reportDirectory = () => path.join(testRoot, 'state', 'review-reports');
 
+  it('does not charge or review a different head than the retry wrapper pinned', async () => {
+    await expect((executeReview as any)('acme', 'payments', 123, makeState(), undefined, 'b'.repeat(40)))
+      .rejects.toThrow('revision changed');
+    expect(mockRunReviewVerificationGate).not.toHaveBeenCalled();
+    expect(mockPostInlineReview).not.toHaveBeenCalled();
+  });
+
   it('releases only the crashed old revision lock after published recovery', async () => {
     const state = new ReviewedPRsState(path.join(testRoot, 'review-state.json'));
     (state.markPRReviewing as any)('acme', 'payments', 123, pinnedHeadSha);

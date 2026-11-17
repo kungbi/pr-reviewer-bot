@@ -6,11 +6,11 @@
 
 import { MAX_RETRIES, getSharedState } from '../utils/state-manager';
 import { sendReviewFailedNotification } from '../discord-notifier';
-import { postComment } from '../github';
+import { getPRHeadSha, postComment } from '../github';
 import { appendBotAuthorDisclosure } from '../utils/comment-disclosure';
 import config from '../utils/config';
 import logger from '../utils/logger';
-import { ReportPublicationAmbiguousError, ReportRecoveryError } from './review-report-outbox';
+import { readReportOutbox, ReportPublicationAmbiguousError, ReportRecoveryError } from './review-report-outbox';
 import { ModelCapacityError } from '../utils/sessions_spawn';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
 
@@ -26,18 +26,29 @@ async function executeReviewWithRetry(
 
   const state = getSharedState();
 
-  if (state.isPRSkipped(owner, repo, prNumber)) {
-    logger.warn(`[PollingReviewer] PR ${prLabel} is permanently skipped after ${MAX_RETRIES} failures — skipping`);
-    return { success: false, skipped: true, retryCount: MAX_RETRIES };
+  let headSha = prInfo.headSha;
+  if (headSha === undefined) {
+    try { headSha = await getPRHeadSha(owner, repo, prNumber); }
+    catch { headSha = null; }
+  }
+  const recovering = headSha ? readReportOutbox(owner, repo, prNumber, headSha) : null;
+  if (!recovering && !state.beginPRRetryAttempt(owner, repo, prNumber, headSha ?? null)) {
+    logger.warn(`[PollingReviewer] ${prLabel}: retry gate closed (exhausted, in-progress, or revision unknown)`);
+    return { success: false, skipped: true, retryCount: state.getPRRetryCount(owner, repo, prNumber) };
   }
 
   const currentRetries = state.getPRRetryCount(owner, repo, prNumber);
   logger.info(`[PollingReviewer] Starting review for PR ${prLabel} "${title}" (attempt ${currentRetries + 1}/${MAX_RETRIES})`);
 
   try {
-    const result = await reviewFn(prInfo);
+    const result = await reviewFn({ ...prInfo, headSha });
 
-    state.clearPRRetries(owner, repo, prNumber);
+    try {
+      if (headSha) state.completePRRetryAttempt(owner, repo, prNumber, headSha);
+    } catch (cleanupError) {
+      // Success is not a semantic failure even if local cleanup fails.
+      logger.error(`[PollingReviewer] Retry cleanup failed after review success: ${(cleanupError as Error).message}`);
+    }
     logger.info(`[PollingReviewer] Review succeeded for PR ${prLabel}`);
     return { success: true, skipped: false, retryCount: currentRetries, result };
 
@@ -46,12 +57,12 @@ async function executeReviewWithRetry(
     const timestamp = new Date().toISOString();
 
     if (err instanceof ReportPublicationAmbiguousError || err instanceof ReportRecoveryError) {
-      state.markPRCapacityRetry(owner, repo, prNumber, errMsg);
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, recovering ? undefined : headSha ?? undefined);
       logger.error(`[PollingReviewer] ${prLabel}: ${errMsg}; no fallback GitHub write will be attempted`);
       return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
     }
     if (err instanceof ModelCapacityError) {
-      state.markPRCapacityRetry(owner, repo, prNumber, errMsg);
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, recovering ? undefined : headSha ?? undefined);
       logger.warn(
         `[PollingReviewer] [${timestamp}] Capacity unavailable for PR ${prLabel}; ` +
         `stage=${err.stage ?? 'unknown'}, capacityAttempts=${err.attempts ?? 1}/${MAX_RETRIES}, ` +
@@ -63,14 +74,26 @@ async function executeReviewWithRetry(
 
     logger.error(`[PollingReviewer] [${timestamp}] Review FAILED for PR ${prLabel} (attempt ${currentRetries + 1}) — ${errMsg}`);
 
-    const newCount = state.markPRRetryFailure(owner, repo, prNumber, errMsg);
+    // Report recovery cannot enter a fresh failure-notification path.
+    if (recovering || !headSha) {
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, recovering ? undefined : headSha ?? undefined);
+      return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
+    }
+    const newCount = state.recordPRRevisionFailure(owner, repo, prNumber, headSha, errMsg);
 
     if (newCount >= MAX_RETRIES) {
       logger.error(
         `[PollingReviewer] [${timestamp}] PR ${prLabel} has failed ${newCount}/${MAX_RETRIES} times — permanently skipping`
       );
+      if (!state.reserveFailureNotification(owner, repo, prNumber, headSha)) {
+        return { success: false, skipped: true, retryCount: newCount, error: errMsg };
+      }
+      let delivered = true;
+      // Provider credentials are operator work, not a PR-author action. No
+      // credential access or login here, and no GitHub fallback for auth faults.
+      const authFailure = /refresh[_ -]?token|refresh401|401\s+Unauthorized|authentication (?:failed|error)|not (?:logged|signed) in/i.test(errMsg);
       try {
-        await postComment(
+        if (!authFailure) await postComment(
           owner,
           repo,
           prNumber,
@@ -79,18 +102,22 @@ async function executeReviewWithRetry(
           )
         );
       } catch (postErr) {
+        delivered = false;
         logger.error(`[PollingReviewer] Failed to post fallback comment: ${(postErr as Error).message}`);
       }
       try {
-        await sendReviewFailedNotification({
+        const notified = await sendReviewFailedNotification({
           owner, repo, prNumber,
           prTitle: title ?? `PR #${prNumber}`,
           errorMessage: errMsg,
           permanentlySkipped: true,
         });
+        if (notified === false) delivered = false;
       } catch (notifyErr) {
+        delivered = false;
         logger.warn(`[PollingReviewer] Discord skip notification failed: ${(notifyErr as Error).message}`);
       }
+      state.finishFailureNotification(owner, repo, prNumber, headSha, delivered);
       return { success: false, skipped: true, retryCount: newCount, error: errMsg };
     }
 

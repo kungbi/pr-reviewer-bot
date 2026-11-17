@@ -249,6 +249,7 @@ async function executeReviewInternal(
   prNumber: number,
   stateOverride?: ReviewedPRsState,
   recoveryHeadSha?: string,
+  expectedHeadSha?: string,
 ): Promise<ReviewResult> {
   const state = stateOverride || getSharedState();
 
@@ -275,6 +276,10 @@ async function executeReviewInternal(
     } catch (err) {
       logger.warn(`[review-executor] Could not fetch fallback head SHA: ${(err as Error).message}`);
     }
+  }
+
+  if (expectedHeadSha && normalizedCommitSha(headSha) !== expectedHeadSha) {
+    throw new ReportRecoveryError('revision changed after the exact retry revision was reserved');
   }
 
   // Only a provably unattempted publication may write during recovery.
@@ -686,8 +691,9 @@ function executeReview(
   prNumber: number,
   stateOverride?: ReviewedPRsState,
   recoveryHeadSha?: string,
+  expectedHeadSha?: string,
 ): Promise<ReviewResult> {
-  const task = reviewShutdown.run(() => executeReviewInternal(owner, repo, prNumber, stateOverride, recoveryHeadSha));
+  const task = reviewShutdown.run(() => executeReviewInternal(owner, repo, prNumber, stateOverride, recoveryHeadSha, expectedHeadSha));
   if (task) return task;
 
   logger.info(`[review-executor] Draining; refused new review: ${owner}/${repo}#${prNumber}`);

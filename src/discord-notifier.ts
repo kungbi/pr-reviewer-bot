@@ -19,7 +19,7 @@ function truncateDiscordField(value: string | undefined | null, max = 1000): str
 /**
  * Send a POST request to Discord webhook
  */
-async function sendWebhook(payload: unknown): Promise<boolean> {
+async function sendWebhook(payload: unknown, maxAttempts = MAX_RETRIES): Promise<boolean> {
   if (!DISCORD_WEBHOOK_URL) {
     console.warn('[DISCORD] DISCORD_WEBHOOK_URL not set, skipping notification');
     return false;
@@ -27,7 +27,7 @@ async function sendWebhook(payload: unknown): Promise<boolean> {
 
   let lastError: Error = new Error('No attempts made');
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await fetch(DISCORD_WEBHOOK_URL, {
         method: 'POST',
@@ -48,12 +48,12 @@ async function sendWebhook(payload: unknown): Promise<boolean> {
       console.error(`[DISCORD] Attempt ${attempt} failed:`, lastError.message);
     }
 
-    if (attempt < MAX_RETRIES) {
+    if (attempt < maxAttempts) {
       await sleep(RETRY_DELAY_MS * attempt);
     }
   }
 
-  console.error(`[DISCORD] All ${MAX_RETRIES} attempts failed. Last error:`, lastError.message);
+  console.error(`[DISCORD] All ${maxAttempts} attempts failed. Last error:`, lastError.message);
   return false;
 }
 
@@ -294,7 +294,7 @@ async function sendReviewFailedNotification({ owner, repo, prNumber, prTitle, pr
     username: config.botName,
     avatar_url: config.botAvatarUrl,
     embeds: [embed],
-  });
+  }, permanentlySkipped ? 1 : MAX_RETRIES);
 }
 
 /**

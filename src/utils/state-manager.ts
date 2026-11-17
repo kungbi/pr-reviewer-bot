@@ -51,6 +51,15 @@ class ReviewedPRsState {
           (!candidate.reviewPublications || typeof candidate.reviewPublications !== 'object' || Array.isArray(candidate.reviewPublications))) {
         throw new Error('State file has unexpected format: reviewPublications must be an object');
       }
+      if (candidate.reviewRetryBudgets !== undefined) {
+        const budgets = candidate.reviewRetryBudgets;
+        if (!budgets || typeof budgets !== 'object' || Array.isArray(budgets)
+          || Object.values(budgets).some(b => !b || !Number.isSafeInteger(b.retryCount) || b.retryCount < 0
+            || typeof b.blocked !== 'boolean'
+            || (b.failureNotification !== undefined && !['attempted', 'completed', 'delivery_unknown', 'suppressed_legacy'].includes(b.failureNotification)))) {
+          throw new Error('Invalid durable review retry budgets');
+        }
+      }
       return {
         data: {
           ...candidate,
@@ -151,6 +160,11 @@ class ReviewedPRsState {
         }
         const loaded = this.parseStateData(JSON.parse(content) as unknown);
         this.data = loaded.data;
+        const previousBudgets = JSON.stringify(this.data.reviewRetryBudgets);
+        for (const pr of Object.values(this.data.reviewedPRs)) {
+          this.importLegacyRetryBudget(pr.owner, pr.repo, pr.prNumber);
+        }
+        if (previousBudgets !== JSON.stringify(this.data.reviewRetryBudgets)) this.save();
         if (loaded.migrated) {
           logger.warn('[StateManager] Migrating legacy flat-array state to object format');
           this.save();
@@ -199,6 +213,17 @@ class ReviewedPRsState {
 
       const pendingData = this.data;
       const saved = this.withReviewPublicationLock(() => {
+        const persistedData = fs.existsSync(this.stateFilePath)
+          ? this.parseStateData(JSON.parse(fs.readFileSync(this.stateFilePath, 'utf8'))).data : undefined;
+        const budgets = { ...(pendingData.reviewRetryBudgets ?? {}) };
+        for (const [key, durable] of Object.entries(persistedData?.reviewRetryBudgets ?? {})) {
+          const pending = budgets[key];
+          budgets[key] = {
+            retryCount: Math.max(durable.retryCount, pending?.retryCount ?? 0),
+            blocked: durable.blocked || !!pending?.blocked,
+            failureNotification: durable.failureNotification ?? pending?.failureNotification,
+          };
+        }
         // Generic PR/reply state may be stale in another process. Never let it
         // delete or downgrade a durable review-publication tombstone already on disk.
         const persistedPublications = fs.existsSync(this.stateFilePath)
@@ -206,6 +231,7 @@ class ReviewedPRsState {
           : {};
         this.data = {
           ...pendingData,
+          reviewRetryBudgets: budgets,
           reviewPublications: {
             ...(pendingData.reviewPublications ?? {}),
             ...persistedPublications,
@@ -289,6 +315,8 @@ class ReviewedPRsState {
   markPRReviewing(owner: string, repo: string, prNumber: number, headSha: string | null = null): void {
     const key = this._getPRKey(owner, repo, prNumber);
     const existing = this.data.reviewedPRs[key];
+    // Legacy callers must not erase exhaustion before the retry gate can see it.
+    if (existing && (existing.status === 'skipped' || (existing.retryCount ?? 0) >= MAX_RETRIES)) return;
     this.data.reviewedPRs[key] = {
       ...existing,
       owner,
@@ -615,9 +643,137 @@ class ReviewedPRsState {
     return this.data.replyMonitorStartedAt;
   }
 
-  /**
-   * Get retry count for a PR (0 if not yet retried)
-   */
+  private retryKey(owner: string, repo: string, prNumber: number, headSha: string | null): string {
+    return `${this._getPRKey(owner, repo, prNumber)}:${headSha ?? 'unknown'}`;
+  }
+
+  private exactRetrySha(value: unknown): string | null {
+    return typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value) ? value : null;
+  }
+
+  private importLegacyRetryBudget(owner: string, repo: string, prNumber: number): void {
+    const pr = this.data.reviewedPRs[this._getPRKey(owner, repo, prNumber)];
+    if (!pr || (!(pr.retryCount ?? 0) && pr.status !== 'skipped')) return;
+    // A successful review SHA is not evidence of which revision failed.
+    const sha = this.exactRetrySha(pr.retryHeadSha ?? pr.reviewingHeadSha);
+    const key = this.retryKey(owner, repo, prNumber, sha);
+    this.data.reviewRetryBudgets ??= {};
+    const previous = this.data.reviewRetryBudgets[key];
+    const count = Math.max(pr.retryCount ?? 0, previous?.retryCount ?? 0);
+    const blocked = !!previous?.blocked || pr.status === 'skipped' || count >= MAX_RETRIES;
+    this.data.reviewRetryBudgets[key] = {
+      retryCount: count, blocked,
+      failureNotification: previous?.failureNotification ?? (blocked ? 'suppressed_legacy' : undefined),
+    };
+  }
+
+  /** Unknown revisions never establish a new retry budget. Call under the state lock. */
+  private retryBlocked(owner: string, repo: string, prNumber: number, headSha: string | null): boolean {
+    const budgets = this.data.reviewRetryBudgets ?? {};
+    const unknown = budgets[this.retryKey(owner, repo, prNumber, null)];
+    const current = budgets[this.retryKey(owner, repo, prNumber, headSha)];
+    return !this.exactRetrySha(headSha) || !!unknown || !!current?.blocked || (current?.retryCount ?? 0) >= MAX_RETRIES;
+  }
+
+  isPRRetryBlocked(owner: string, repo: string, prNumber: number, headSha: string | null): boolean {
+    let blocked = true;
+    if (!this.withReviewPublicationLock(() => {
+      this.importLegacyRetryBudget(owner, repo, prNumber);
+      blocked = this.retryBlocked(owner, repo, prNumber, headSha);
+      this.save();
+      return true;
+    })) throw new Error('Cannot inspect durable retry budget');
+    return blocked;
+  }
+
+  /** Atomically gate every ingress before changing mutable PR status. */
+  beginPRRetryAttempt(owner: string, repo: string, prNumber: number, headSha: string | null): boolean {
+    return this.withReviewPublicationLock(() => {
+      this.importLegacyRetryBudget(owner, repo, prNumber);
+      if (this.retryBlocked(owner, repo, prNumber, headSha) || this.isPRReviewing(owner, repo, prNumber)
+        || (this.isPRCompleted(owner, repo, prNumber) && this.getReviewedHeadSha(owner, repo, prNumber) === headSha)) {
+        this.save();
+        return false;
+      }
+      const key = this._getPRKey(owner, repo, prNumber);
+      const existing = this.data.reviewedPRs[key];
+      const budgetKey = this.retryKey(owner, repo, prNumber, headSha);
+      this.data.reviewRetryBudgets ??= {};
+      const budget = this.data.reviewRetryBudgets[budgetKey] ??= { retryCount: 0, blocked: false };
+      this.data.reviewedPRs[key] = {
+        ...existing, owner, repo, prNumber, status: 'reviewing',
+        reviewingAt: new Date().toISOString(), reviewingHeadSha: headSha, retryHeadSha: headSha,
+        retryCount: budget.retryCount,
+        failures: existing?.retryHeadSha === headSha ? existing.failures : [],
+      };
+      this.save();
+      return true;
+    });
+  }
+
+  recordPRRevisionFailure(owner: string, repo: string, prNumber: number, headSha: string, errorMessage: string): number {
+    let count = MAX_RETRIES;
+    if (!this.withReviewPublicationLock(() => {
+      const budget = this.data.reviewRetryBudgets?.[this.retryKey(owner, repo, prNumber, headSha)];
+      if (!budget) throw new Error('Missing exact revision retry reservation');
+      count = budget.retryCount = budget.blocked || budget.retryCount >= MAX_RETRIES
+        ? budget.retryCount : budget.retryCount + 1;
+      budget.blocked ||= count >= MAX_RETRIES;
+      const pr = this.data.reviewedPRs[this._getPRKey(owner, repo, prNumber)];
+      if (pr?.retryHeadSha === headSha) {
+        pr.retryCount = count;
+        pr.status = budget.blocked ? 'skipped' : 'pending_retry';
+        pr.lastFailedAt = new Date().toISOString();
+        pr.failures = [...(pr.failures ?? []), { timestamp: pr.lastFailedAt, error: errorMessage }];
+      }
+      this.save();
+      return true;
+    })) throw new Error('Cannot persist revision failure');
+    return count;
+  }
+
+  reserveFailureNotification(owner: string, repo: string, prNumber: number, headSha: string): boolean {
+    return this.withReviewPublicationLock(() => {
+      const budget = this.data.reviewRetryBudgets?.[this.retryKey(owner, repo, prNumber, headSha)];
+      if (!budget?.blocked || budget.retryCount !== MAX_RETRIES || budget.failureNotification) return false;
+      // Persist POST intent before calling any external writer. Never replay.
+      budget.failureNotification = 'attempted';
+      this.save();
+      return true;
+    });
+  }
+
+  completePRRetryAttempt(owner: string, repo: string, prNumber: number, headSha: string): void {
+    if (!this.withReviewPublicationLock(() => {
+      const pr = this.data.reviewedPRs[this._getPRKey(owner, repo, prNumber)];
+      const ownsAttempt = pr?.status === 'reviewing' || pr?.status === 'pending_retry'
+        ? pr.retryHeadSha === headSha : pr?.headSha === headSha;
+      if (pr && ownsAttempt) {
+        delete pr.retryCount;
+        delete pr.failures;
+        delete pr.lastFailedAt;
+        delete pr.capacityRetryCount;
+        delete pr.lastCapacityAt;
+        delete pr.lastCapacityError;
+        if (pr.status === 'reviewing') pr.status = 'reviewed';
+      }
+      // Preserve the executor's COMMENT/report verdict and durable tombstones.
+      this.save();
+      return true;
+    })) throw new Error('Cannot finalize retry attempt');
+  }
+
+  finishFailureNotification(owner: string, repo: string, prNumber: number, headSha: string, delivered: boolean): void {
+    if (!this.withReviewPublicationLock(() => {
+      const budget = this.data.reviewRetryBudgets?.[this.retryKey(owner, repo, prNumber, headSha)];
+      if (!budget || budget.failureNotification !== 'attempted') return false;
+      budget.failureNotification = delivered ? 'completed' : 'delivery_unknown';
+      this.save();
+      return true;
+    })) throw new Error('Cannot finalize failure notification');
+  }
+
+  /** Get retry count for a PR (0 if not yet retried). */
   getPRRetryCount(owner: string, repo: string, prNumber: number): number {
     const key = this._getPRKey(owner, repo, prNumber);
     const pr = this.data.reviewedPRs[key];
@@ -661,7 +817,17 @@ class ReviewedPRsState {
    * Release the in-progress lock after a provider capacity failure without
    * consuming the semantic retry budget. The next polling cycle may retry it.
    */
-  markPRCapacityRetry(owner: string, repo: string, prNumber: number, errorMessage: string): void {
+  markPRCapacityRetry(owner: string, repo: string, prNumber: number, errorMessage: string, expectedHeadSha?: string): void {
+    if (expectedHeadSha) {
+      if (!this.withReviewPublicationLock(() => {
+        const current = this.data.reviewedPRs[this._getPRKey(owner, repo, prNumber)];
+        if (current?.status === 'reviewing' && current.retryHeadSha === expectedHeadSha) {
+          this.markPRCapacityRetry(owner, repo, prNumber, errorMessage);
+        }
+        return true;
+      })) throw new Error('Cannot release exact revision retry lock');
+      return;
+    }
     const key = this._getPRKey(owner, repo, prNumber);
     const existing: PRStateEntry = this.data.reviewedPRs[key] || {
       owner, repo, prNumber, status: 'pending_retry', retryCount: 0, failures: []
@@ -731,6 +897,8 @@ class ReviewedPRsState {
     for (const key of Object.keys(this.data.reviewedPRs)) {
       const pr = this.data.reviewedPRs[key];
       if (!terminal.includes(pr.status)) continue;
+      // Keep un-migrated legacy exhaustion; deleting it would reopen a failed PR.
+      if (pr.status === 'skipped' || (pr.retryCount ?? 0) > 0) continue;
       const ts = pr.reviewedAt ? new Date(pr.reviewedAt).getTime() : NaN;
       if (isNaN(ts) || now - ts > maxAgeMs) {
         // Publication tombstones and ambiguous outbox records are independent safety state.
