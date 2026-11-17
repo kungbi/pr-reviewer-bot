@@ -171,26 +171,31 @@ test('discovers durable outbox even after review request disappears', async () =
   } finally { process.chdir(old); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('failed report recovery releases reviewing lock and is retried by the next poll', async () => {
+test('failed report recovery preserves ordinary admission and is retried by the next poll', async () => {
+  jest.clearAllMocks();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'poller-recovery-'));
   try {
     const state = new ReviewedPRsState(path.join(dir, 'state.json'));
-    state.markPRReviewing('acme', 'repo', 1);
-    state.markPRCapacityRetry('acme', 'repo', 1, 'prior failure');
+    state.load();
+    const headB = 'b'.repeat(40);
+    expect(state.beginPRRetryAttempt('acme', 'repo', 1, headB)).toBe(true);
+    const admission = { ...state.data.reviewedPRs['acme/repo#1'] };
     (getSharedState as jest.Mock).mockReturnValue(state);
-    (getPRHeadSha as jest.Mock).mockResolvedValue('abc');
+    (getPRHeadSha as jest.Mock).mockResolvedValue('a'.repeat(40));
     (axios.get as jest.Mock).mockResolvedValue({ data: { items: [{ number: 1, title: 'PR', html_url: 'https://github.com/acme/repo/pull/1' }] } });
-    (executeReview as jest.Mock).mockImplementationOnce(async () => {
-      state.markPRReviewing('acme', 'repo', 1);
-      throw new ReportRecoveryError('disk failure');
-    }).mockResolvedValueOnce({ success: true, verdict: 'already_reviewed', commentPosted: false });
+    (executeReview as jest.Mock).mockReset().mockRejectedValueOnce(new ReportRecoveryError('disk failure'))
+      .mockResolvedValueOnce({ success: true, verdict: 'already_reviewed', commentPosted: false });
     await pollAssignedPRs();
-    expect(state.isPRReviewing('acme', 'repo', 1)).toBe(false);
+    expect(state.data.reviewedPRs['acme/repo#1']).toEqual(admission);
     expect(state.getPRRetryCount('acme', 'repo', 1)).toBe(0);
     await pollAssignedPRs();
     expect(executeReview).toHaveBeenCalledTimes(2);
-    expect(state.isPRReviewing('acme', 'repo', 1)).toBe(false);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    expect(state.data.reviewedPRs['acme/repo#1']).toEqual(admission);
+    expect(state.beginPRRetryAttempt('acme', 'repo', 1, headB)).toBe(false);
+  } finally {
+    (executeReview as jest.Mock).mockReset();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 

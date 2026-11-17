@@ -20,6 +20,7 @@ import {
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { sessions_spawn, ModelCapacityError } from '../utils/sessions_spawn';
+import { ModelAuthenticationError, modelAuthenticationError } from '../utils/model-authentication-error';
 import { shouldUseLocalClone } from '../utils/agent-command';
 import { cloneRepoForPR, cleanupClone } from './repo-cloner';
 import { getSharedRepositoryCache, RepositoryCache } from './repository-cache';
@@ -578,7 +579,7 @@ async function executeReviewInternal(
     } catch (err) {
       subagentError = outboxEntry && (outboxEntry as ReportOutboxEntry).status === 'prepared'
         ? publicationFailure(outboxEntry as ReportOutboxEntry, state, err)
-        : err instanceof Error ? err : new Error(String(err));
+        : modelAuthenticationError(err) ?? (err instanceof Error ? err : new Error(String(err)));
       logger.error(`[review-executor] Review draft/verification failed: ${subagentError.message}`);
       subagentFailed = true;
     } finally {
@@ -618,7 +619,9 @@ async function executeReviewInternal(
     // A provider capacity error has already exhausted its stage-local backoff.
     // Preserve its type so the polling wrapper releases the review lock without
     // consuming the semantic retry budget or emitting a generic failure alert.
-    if (subagentError instanceof ModelCapacityError || subagentError instanceof ReportPublicationAmbiguousError || subagentError instanceof ReportRecoveryError) {
+    // Authentication retains only its safe type/message, so exhaustion alerts
+    // the operator once instead of notifying the PR author or leaking stderr.
+    if (subagentError instanceof ModelAuthenticationError || subagentError instanceof ModelCapacityError || subagentError instanceof ReportPublicationAmbiguousError || subagentError instanceof ReportRecoveryError) {
       throw subagentError;
     }
 

@@ -12,6 +12,7 @@ import config from '../utils/config';
 import logger from '../utils/logger';
 import { readReportOutbox, ReportPublicationAmbiguousError, ReportRecoveryError } from './review-report-outbox';
 import { ModelCapacityError } from '../utils/sessions_spawn';
+import { modelAuthenticationError } from '../utils/model-authentication-error';
 import { PRInfo, RetryOutcome, ReviewResult } from '../types';
 
 /**
@@ -44,7 +45,7 @@ async function executeReviewWithRetry(
     const result = await reviewFn({ ...prInfo, headSha });
 
     try {
-      if (headSha) state.completePRRetryAttempt(owner, repo, prNumber, headSha);
+      if (!recovering && headSha) state.completePRRetryAttempt(owner, repo, prNumber, headSha);
     } catch (cleanupError) {
       // Success is not a semantic failure even if local cleanup fails.
       logger.error(`[PollingReviewer] Retry cleanup failed after review success: ${(cleanupError as Error).message}`);
@@ -53,16 +54,25 @@ async function executeReviewWithRetry(
     return { success: true, skipped: false, retryCount: currentRetries, result };
 
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
+    const authFailure = modelAuthenticationError(err);
+    const errMsg = authFailure?.message ?? (err instanceof Error ? err.message : String(err));
     const timestamp = new Date().toISOString();
 
+    // Outbox recovery never acquired ordinary admission. It must not release
+    // or otherwise mutate a lock/budget owned by another revision (or attempt).
+    // The durable outbox independently keeps recovery eligible on the next poll.
+    if (recovering) {
+      logger.error(`[PollingReviewer] ${prLabel}: report recovery failed: ${errMsg}; no admission state change or fallback GitHub write`);
+      return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
+    }
+
     if (err instanceof ReportPublicationAmbiguousError || err instanceof ReportRecoveryError) {
-      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, recovering ? undefined : headSha ?? undefined);
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, headSha ?? undefined);
       logger.error(`[PollingReviewer] ${prLabel}: ${errMsg}; no fallback GitHub write will be attempted`);
       return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
     }
     if (err instanceof ModelCapacityError) {
-      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, recovering ? undefined : headSha ?? undefined);
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, headSha ?? undefined);
       logger.warn(
         `[PollingReviewer] [${timestamp}] Capacity unavailable for PR ${prLabel}; ` +
         `stage=${err.stage ?? 'unknown'}, capacityAttempts=${err.attempts ?? 1}/${MAX_RETRIES}, ` +
@@ -74,9 +84,8 @@ async function executeReviewWithRetry(
 
     logger.error(`[PollingReviewer] [${timestamp}] Review FAILED for PR ${prLabel} (attempt ${currentRetries + 1}) — ${errMsg}`);
 
-    // Report recovery cannot enter a fresh failure-notification path.
-    if (recovering || !headSha) {
-      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, recovering ? undefined : headSha ?? undefined);
+    if (!headSha) {
+      state.markPRCapacityRetry(owner, repo, prNumber, errMsg, headSha ?? undefined);
       return { success: false, skipped: false, retryCount: currentRetries, error: errMsg };
     }
     const newCount = state.recordPRRevisionFailure(owner, repo, prNumber, headSha, errMsg);
@@ -91,7 +100,6 @@ async function executeReviewWithRetry(
       let delivered = true;
       // Provider credentials are operator work, not a PR-author action. No
       // credential access or login here, and no GitHub fallback for auth faults.
-      const authFailure = /refresh[_ -]?token|refresh401|401\s+Unauthorized|authentication (?:failed|error)|not (?:logged|signed) in/i.test(errMsg);
       try {
         if (!authFailure) await postComment(
           owner,

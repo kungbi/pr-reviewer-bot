@@ -6,6 +6,7 @@
  * (stdin vs positional arg)은 에이전트별로 buildAgentInvocation이 결정한다.
  */
 import { spawn } from 'child_process';
+import { ModelAuthenticationError, modelAuthenticationError } from './model-authentication-error';
 import config from './config';
 import { buildAgentInvocation, buildAgentSpawnPath, type ReviewAgent } from './agent-command';
 
@@ -96,6 +97,11 @@ export function parseCodexExecJsonl(output: string): string {
     }
     if (!isJsonRecord(event)) continue;
 
+    if (event.type === 'turn.failed' && isJsonRecord(event.error)
+      && (modelAuthenticationError(event.error.code) || modelAuthenticationError(event.error.message))) {
+      throw new ModelAuthenticationError();
+    }
+
     const item = isJsonRecord(event.item) ? event.item : null;
     const isAgentMessage = item?.type === 'agent_message';
     if (isAgentMessage && typeof item.text === 'string' && item.text.trim()) {
@@ -173,6 +179,10 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
+      // Provider diagnostics can include credentials. Classify stderr before
+      // logging/truncating it and propagate only a fixed, typed safe message.
+      const authError = code !== 0 ? modelAuthenticationError(errorOutput) : null;
+      if (authError) { reject(authError); return; }
       if (code === 0) {
         try {
           const trimmed = command === 'codex'
@@ -187,7 +197,7 @@ export async function sessions_spawn(prompt: string, options?: SpawnOptions): Pr
         try {
           if (command === 'codex') parseCodexExecJsonl(output);
         } catch (error) {
-          if (error instanceof ModelCapacityError) {
+          if (error instanceof ModelCapacityError || error instanceof ModelAuthenticationError) {
             reject(error);
             return;
           }
